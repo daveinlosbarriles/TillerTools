@@ -27,8 +27,11 @@ A Google Apps Script sidebar for **Tiller** spreadsheets that adds a Quick Searc
 
    **Creating or replacing files:**
    - **Code.gs**  
-     - If **Code.gs** already exists: select it, delete its contents, and paste in the contents of the **Code.js** file from this repo.  
-     - If it doesn’t exist: click the **+** next to “Files”, choose **Script**, name it `Code`, then paste the contents of **Code.js**.  
+     - This application only needs an **onOpen** function that adds the “Tiller Tools” menu with a “Quick Search” item. You do **not** need to delete any existing code in **Code.gs**.  
+     - If **Code.gs** already exists and has code you want to keep: add the **onOpen** function from the **Code.js** file in this repo. If you already have an **onOpen** function, add the menu line to it:  
+       `SpreadsheetApp.getUi().createMenu("Tiller Tools").addItem("Quick Search", "openQuickSearchSidebar").addToUi();`  
+       (The full **Code.js** in the repo shows the complete onOpen; you can copy just that function or merge its menu into yours.)  
+     - If **Code.gs** doesn’t exist or is empty: click **+** → **Script**, name it `Code`, then paste the contents of **Code.js**.  
      - In Apps Script, script files are saved as **.gs** (not .js). The editor will show “Code.gs” once saved. That’s correct.
    - **QuickSearchSidebar.gs**  
      - Click **+** → **Script**, name it `QuickSearchSidebar`, then paste the contents of **QuickSearchSidebar.js** from this repo. It will appear as **QuickSearchSidebar.gs**.
