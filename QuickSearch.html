@@ -1,0 +1,899 @@
+<style>
+  html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  body {
+    font-family: Arial, sans-serif;
+    font-size: 13px;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .sidebar-title {
+    font-size: 12px;
+    font-weight: bold;
+    margin: 0 0 4px 0;
+    color: #333;
+  }
+  .quick-search-actions {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .search-btn, .reset-all-btn {
+    padding: 4px 10px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    background: #eee;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .search-btn.has-criteria {
+    background: #1976d2;
+    color: #fff;
+    border-color: #1976d2;
+  }
+  .reset-all-btn.has-value {
+    background: #1976d2;
+    color: #fff;
+    border-color: #1976d2;
+  }
+  .section {
+    margin-bottom: 6px;
+    padding-top: 4px;
+  }
+  .section-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .section-title-row select {
+    width: auto;
+    min-width: 110px;
+  }
+  .section-title {
+    font-weight: bold;
+    width: 72px;
+    flex-shrink: 0;
+  }
+  .section-title-row .reset-section-btn {
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+  .reset-section-btn {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    font-size: 14px;
+    line-height: 1;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    background: #eee;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .reset-section-btn.has-value {
+    background: #1976d2;
+    color: #fff;
+    border-color: #1976d2;
+  }
+  .date-range-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+  }
+  .date-range-row label {
+    margin-right: 6px;
+  }
+  .amount-inline-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .amount-inline-row input[type="number"] {
+    width: 64px;
+    min-width: 56px;
+    box-sizing: border-box;
+  }
+  input[type="date"] {
+    width: auto;
+    min-width: 88px;
+    max-width: 96px;
+  }
+  input[type="number"] {
+    width: auto;
+    min-width: 56px;
+    max-width: 72px;
+  }
+  input[type="text"] {
+    flex: 1;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+  .description-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 2px;
+  }
+  .description-row input#descContains {
+    width: 100%;
+    min-width: 0;
+  }
+  .desc-help-link {
+    font-size: inherit;
+    color: #1976d2;
+    text-decoration: underline;
+    font-weight: bold;
+  }
+  .desc-help-link:hover {
+    color: #0d47a1;
+  }
+  .desc-regex-help {
+    font-size: 11px;
+    margin-top: 4px;
+    margin-bottom: 6px;
+    padding: 6px 8px;
+    background: #f5f5f5;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    overflow-x: auto;
+  }
+  .desc-regex-help table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .desc-regex-help th,
+  .desc-regex-help td {
+    border: 1px solid #ddd;
+    padding: 4px 6px;
+    text-align: left;
+    vertical-align: top;
+  }
+  .desc-regex-help th {
+    background: #e8e8e8;
+    font-weight: bold;
+  }
+  .desc-regex-help code {
+    font-size: 10px;
+    background: #fff;
+    padding: 1px 3px;
+    border-radius: 2px;
+  }
+  .account-inline-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .account-dropdown-wrap {
+    flex: 1;
+    min-width: 140px;
+    position: relative;
+  }
+  .account-dropdown-wrap .account-dropdown-trigger {
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .account-dropdown {
+    position: relative;
+  }
+  .account-dropdown-trigger {
+    width: 100%;
+    padding: 6px 10px;
+    text-align: left;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+  }
+  .account-dropdown-trigger:hover {
+    border-color: #999;
+  }
+  .account-dropdown-panel {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 100%;
+    margin-top: 2px;
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    background: #fff;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    z-index: 100;
+    padding: 4px 0;
+  }
+  .account-dropdown-panel label {
+    display: block;
+    margin: 0;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-weight: normal;
+  }
+  .account-dropdown-panel label:hover {
+    background: #f0f0f0;
+  }
+  .account-dropdown-panel input {
+    margin-right: 8px;
+  }
+  select {
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .category-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .category-section .section-title-row {
+    flex-shrink: 0;
+  }
+  .category-list-wrap {
+    flex: 1;
+    min-height: 120px;
+    overflow-y: auto;
+    border: 1px solid #ddd;
+    padding: 4px;
+    background: #fafafa;
+    font-family: "Consolas", "Monaco", "Courier New", monospace;
+    font-size: 12px;
+  }
+  .category-list-wrap .cat-row {
+    display: grid;
+    grid-template-columns: auto 1fr minmax(0, 1fr);
+    gap: 8px 12px;
+    align-items: center;
+    margin-bottom: 2px;
+    padding: 1px 0;
+  }
+  .category-list-wrap .cat-row .cat-group {
+    max-width: calc(100% - 20px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .category-list-wrap .cat-row input {
+    margin: 0;
+  }
+  .category-list-wrap .cat-header {
+    display: grid;
+    grid-template-columns: auto 1fr minmax(0, 1fr);
+    gap: 8px 12px;
+    padding: 2px 0 4px 0;
+    margin-bottom: 4px;
+    border-bottom: 1px solid #ccc;
+    font-weight: bold;
+    font-size: 11px;
+    color: #555;
+  }
+  .category-list-wrap .cat-header span:first-child {
+    width: 14px;
+  }
+  .category-list-wrap .cat-header span:last-child {
+    max-width: calc(100% - 20px);
+  }
+  .category-list-wrap label {
+    display: block;
+    margin-bottom: 0;
+  }
+  .filter-status {
+    font-size: 12px;
+    color: #1976d2;
+    margin-bottom: 6px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  #quickSearchPanel {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  .apply-sheet-btn {
+    padding: 4px 10px;
+    font-size: 12px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    background: #e8f4fc;
+    cursor: pointer;
+    margin-left: 8px;
+  }
+  .setup-status {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 8px;
+    font-style: italic;
+  }
+</style>
+
+<div id="setupStatus" class="setup-status" style="display:none;">Setup in process...</div>
+
+<div class="quick-search-actions">
+  <button type="button" class="search-btn" id="searchBtn">Search</button>
+  <button type="button" class="reset-all-btn" id="resetAllBtn">Reset All</button>
+</div>
+
+<div id="filterStatus" class="filter-status" style="display:none;"></div>
+
+<div id="quickSearchPanel">
+  <div class="section">
+    <div class="section-title-row">
+      <span class="section-title">Date</span>
+      <select id="datePreset">
+        <option value="">(none)</option>
+        <option value="mtd">MTD</option>
+        <option value="ytd">YTD</option>
+        <option value="last30">Last 30 days</option>
+        <option value="lastmonth">Last month</option>
+        <option value="last90">Last 90 days</option>
+        <option value="lastyear">Last year</option>
+      </select>
+      <button type="button" class="reset-section-btn" id="resetDate" data-section="date" title="Clear date">×</button>
+    </div>
+    <div class="date-range-row">
+      <label for="dateFrom">From</label>
+      <input type="date" id="dateFrom">
+      <span>to</span>
+      <input type="date" id="dateTo">
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title-row amount-inline-row">
+      <span class="section-title">Amount</span>
+      <input type="number" id="amountFrom" placeholder="Min">
+      <span>to</span>
+      <input type="number" id="amountTo" placeholder="Max">
+      <button type="button" class="reset-section-btn" id="resetAmount" data-section="amount" title="Clear amount">×</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title-row description-row">
+      <span class="section-title"><a href="#" id="descRegexHelpLink" class="desc-help-link" title="Regex help">Description</a></span>
+      <input type="text" id="descContains" placeholder="Text to match">
+      <button type="button" class="reset-section-btn" id="resetDescription" data-section="description" title="Clear description">×</button>
+    </div>
+    <div id="descRegexHelp" class="desc-regex-help" style="display:none;">
+      <table>
+        <thead>
+          <tr><th>Example to type in Description field</th><th>Result</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>Amazon | Walmart</code></td><td>Shows rows containing Amazon or Walmart.</td></tr>
+          <tr><td><code>^Vanguard</code></td><td>Shows rows where the name starts with Vanguard.</td></tr>
+          <tr><td><code>1234$</code></td><td>Shows rows where the name ends with 1234.</td></tr>
+          <tr><td><code>(?=.*Amazon)(?=.*Refund)</code></td><td>Shows rows containing both Amazon and Refund (in any order).</td></tr>
+          <tr><td><code>^(?!.*Adjustment).*Amazon</code></td><td>Shows Amazon transactions unless they contain "Adjustment".</td></tr>
+          <tr><td><code>^Gas$</code></td><td>Shows rows that are exactly "Gas" (no "Gasoline").</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title-row" style="margin-bottom:0;">
+      <span class="section-title">Account</span>
+      <div class="account-dropdown account-dropdown-wrap">
+        <button type="button" class="account-dropdown-trigger" id="accountTrigger">Any</button>
+        <div class="account-dropdown-panel" id="accountPanel" style="display:none;"></div>
+      </div>
+      <button type="button" class="reset-section-btn" id="resetAccount" data-section="account" title="Clear account">×</button>
+    </div>
+  </div>
+
+  <div class="section category-section">
+    <div class="section-title-row">
+      <span class="section-title">Category</span>
+      <button type="button" class="reset-section-btn" id="resetCategory" data-section="category" title="Clear category">×</button>
+    </div>
+    <div id="categoryListWrap" class="category-list-wrap"></div>
+  </div>
+</div>
+
+<script>
+  var state = {
+    dateFrom: '',
+    dateTo: '',
+    amountFrom: '',
+    amountTo: '',
+    description: '',
+    accounts: [],
+    categories: []
+  };
+  var options = { categories: [], accounts: [] };
+
+  function $(id) { return document.getElementById(id); }
+
+  function hasDate() {
+    return (state.dateFrom && state.dateFrom.trim()) || (state.dateTo && state.dateTo.trim());
+  }
+  function hasAmount() {
+    return (state.amountFrom !== '' && state.amountFrom != null) || (state.amountTo !== '' && state.amountTo != null);
+  }
+  function hasDescription() {
+    return state.description && String(state.description).trim() !== '';
+  }
+  function hasAccount() {
+    return state.accounts && state.accounts.length > 0;
+  }
+  function hasCategory() {
+    return state.categories && state.categories.length > 0;
+  }
+  function hasAnyCriteria() {
+    return hasDate() || hasAmount() || hasDescription() || hasAccount() || hasCategory();
+  }
+
+  function updateSearchButton() {
+    var btn = $("searchBtn");
+    if (btn) {
+      btn.classList.remove("has-criteria");
+      if (hasAnyCriteria()) btn.classList.add("has-criteria");
+    }
+  }
+
+  function updateResetButtons() {
+    var sections = [
+      { id: "resetDate", fn: hasDate },
+      { id: "resetAmount", fn: hasAmount },
+      { id: "resetDescription", fn: hasDescription },
+      { id: "resetAccount", fn: hasAccount },
+      { id: "resetCategory", fn: hasCategory }
+    ];
+    var anyHasValue = false;
+    sections.forEach(function(s) {
+      var btn = $(s.id);
+      if (btn) {
+        btn.classList.remove("has-value");
+        if (s.fn()) {
+          btn.classList.add("has-value");
+          anyHasValue = true;
+        }
+      }
+    });
+    var resetAllBtn = $("resetAllBtn");
+    if (resetAllBtn) {
+      resetAllBtn.classList.toggle("has-value", anyHasValue);
+    }
+  }
+
+  function syncStateFromUi() {
+    var df = $("dateFrom"), dt = $("dateTo");
+    var af = $("amountFrom"), at = $("amountTo");
+    var desc = $("descContains");
+    if (df) state.dateFrom = df.value || '';
+    if (dt) state.dateTo = dt.value || '';
+    if (af) state.amountFrom = af.value !== undefined ? af.value : '';
+    if (at) state.amountTo = at.value !== undefined ? at.value : '';
+    if (desc) state.description = desc.value || '';
+
+    var panel = $("accountPanel");
+    state.accounts = [];
+    if (panel) {
+      panel.querySelectorAll("input.account-opt:checked").forEach(function(cb) {
+        var v = (cb.value || "").trim();
+        if (v) state.accounts.push(v);
+      });
+    }
+
+    var catChecks = document.querySelectorAll("#categoryListWrap .catOpt:checked");
+    state.categories = [];
+    for (var j = 0; j < catChecks.length; j++) {
+      var v = (catChecks[j].getAttribute("data-category") || catChecks[j].value || "").trim();
+      if (v) state.categories.push(v);
+    }
+  }
+
+  function renderCategoryList() {
+    var wrap = $("categoryListWrap");
+    if (!wrap) return;
+    var selected = new Set(state.categories || []);
+    var items = options.categories || [];
+    var header = '<div class="cat-header"><span></span><span>Category</span><span>Group</span></div>';
+    var rows = items.map(function(opt) {
+      var checked = selected.has(opt.category) ? ' checked' : '';
+      var safeCat = (opt.category || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+      var safeCategory = (opt.category || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      var safeGroup = (opt.group || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      return '<label class="cat-row"><input type="checkbox" class="catOpt" data-category="' + safeCat + '" value="' + safeCat + '"' + checked + '><span class="cat-name">' + safeCategory + '</span><span class="cat-group">' + safeGroup + '</span></label>';
+    }).join("");
+    wrap.innerHTML = header + (rows || '<span>No categories.</span>');
+    wrap.querySelectorAll(".catOpt").forEach(function(cb) {
+      cb.addEventListener("change", function() {
+        syncStateFromUi();
+        updateResetButtons();
+        updateSearchButton();
+      });
+    });
+  }
+
+  function getAccountTriggerText() {
+    var n = (state.accounts && state.accounts.length) || 0;
+    if (n === 0) return "Any";
+    if (n === 1) return state.accounts[0];
+    return n + " selected";
+  }
+
+  function updateAccountTriggerText() {
+    var trigger = $("accountTrigger");
+    if (trigger) trigger.textContent = getAccountTriggerText();
+  }
+
+  function fillAccountSelect() {
+    var trigger = $("accountTrigger");
+    var panel = $("accountPanel");
+    if (!trigger || !panel) return;
+    var selectedSet = new Set(state.accounts || []);
+    panel.innerHTML = "";
+    (options.accounts || []).forEach(function(acc) {
+      var label = document.createElement("label");
+      var cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "account-opt";
+      cb.value = acc;
+      if (selectedSet.has(acc)) cb.checked = true;
+      cb.addEventListener("change", function() {
+        syncStateFromUi();
+        updateAccountTriggerText();
+        updateResetButtons();
+        updateSearchButton();
+      });
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(acc));
+      panel.appendChild(label);
+    });
+    updateAccountTriggerText();
+    if (!trigger.hasAttribute("data-listener")) {
+      trigger.setAttribute("data-listener", "1");
+      trigger.addEventListener("click", function(e) {
+        e.stopPropagation();
+        var vis = panel.style.display === "block";
+        panel.style.display = vis ? "none" : "block";
+        if (!vis) {
+          setTimeout(function() {
+            document.addEventListener("click", function closeAccountPanel() {
+              document.removeEventListener("click", closeAccountPanel);
+              panel.style.display = "none";
+            }, false);
+          }, 0);
+        }
+      });
+    }
+  }
+
+  function setStatus(msg, isError) {
+    var el = $("filterStatus");
+    if (el) {
+      el.style.display = msg ? "block" : "none";
+      el.textContent = msg || "";
+      el.style.color = isError ? "#c00" : "";
+    }
+  }
+
+  function formatTimingBreakdown(tb, roundTripMs, serverMs) {
+    if (!tb) return "";
+    var lines = [];
+    if (roundTripMs != null && serverMs != null) {
+      var otherMs = Math.round(roundTripMs - serverMs);
+      lines.push("  other (network + script startup): " + otherMs + " ms");
+    }
+    if (tb.invocationToFirstOpMs != null) lines.push("  invocationToFirstOp: " + tb.invocationToFirstOpMs + " ms");
+    if (tb.getSheetMs != null) lines.push("  getSheet: " + tb.getSheetMs + " ms");
+    if (tb.getColMs != null) lines.push("  getCol: " + tb.getColMs + " ms");
+    if (tb.buildCriteriaMs != null) lines.push("  buildCriteria: " + tb.buildCriteriaMs + " ms");
+    if (tb.setValueMs != null) lines.push("  setValue: " + tb.setValueMs + " ms");
+    if (tb.refresh) {
+      var r = tb.refresh;
+      lines.push("  refresh: getLastRow " + (r.getLastRowMs || 0) + " ms, getFilterViewId " + (r.getFilterViewIdMs || 0) + " ms, batchUpdate " + (r.batchUpdateMs || 0) + " ms, applyBasicFilter " + (r.applyBasicFilterMs || 0) + " ms");
+      if (r.applyBasicFilterBreakdown) {
+        var b = r.applyBasicFilterBreakdown;
+        if (b.setBasicFilterApiMs != null) {
+          lines.push("    basicFilter (Sheets API): setBasicFilter " + b.setBasicFilterApiMs + " ms");
+        } else {
+          lines.push("    basicFilter: getRange " + (b.getRangeMs || 0) + " ms, getFilter " + (b.getFilterMs || 0) + " ms, createFilter " + (b.createFilterMs || 0) + " ms, buildCriteria " + (b.buildCriteriaMs || 0) + " ms, setColumnFilterCriteria " + (b.setColumnFilterCriteriaMs || 0) + " ms");
+        }
+      }
+    }
+    return lines.length ? "\n" + lines.join("\n") : "";
+  }
+
+  function parseDateStr(s) {
+    if (!s || !String(s).trim()) return null;
+    var d = new Date(String(s).trim());
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  function fmtDate(d) {
+    var y = d.getFullYear(), m = d.getMonth() + 1, day = d.getDate();
+    return y + '-' + (m < 10 ? '0' + m : m) + '-' + (day < 10 ? '0' + day : day);
+  }
+
+  function getPresetDateRange(mode) {
+    var now = new Date();
+    var start, end;
+    if (mode === 'mtd') {
+      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      end = new Date(now.getTime());
+    } else if (mode === 'ytd') {
+      start = new Date(now.getFullYear(), 0, 1);
+      end = new Date(now.getTime());
+    } else if (mode === 'last30') {
+      end = new Date(now.getTime());
+      start = new Date(now); start.setDate(start.getDate() - 29);
+    } else if (mode === 'lastmonth') {
+      start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      end = new Date(now.getFullYear(), now.getMonth(), 0);
+    } else if (mode === 'last90') {
+      end = new Date(now.getTime());
+      start = new Date(now); start.setDate(start.getDate() - 89);
+    } else if (mode === 'lastyear') {
+      start = new Date(now.getFullYear() - 1, 0, 1);
+      end = new Date(now.getFullYear() - 1, 11, 31);
+    } else {
+      return null;
+    }
+    return { from: fmtDate(start), to: fmtDate(end) };
+  }
+
+  function filterRowsClient() {
+    var list = transactionRows;
+    var dateFrom = (state.dateFrom && state.dateFrom.trim()) ? parseDateStr(state.dateFrom) : null;
+    var dateTo = (state.dateTo && state.dateTo.trim()) ? parseDateStr(state.dateTo) : null;
+    var amountFrom = state.amountFrom !== "" && state.amountFrom != null ? parseFloat(String(state.amountFrom).replace(/,/g, "")) : null;
+    var amountTo = state.amountTo !== "" && state.amountTo != null ? parseFloat(String(state.amountTo).replace(/,/g, "")) : null;
+    var desc = state.description && String(state.description).trim();
+    if (desc) desc = desc.toLowerCase();
+    var accountSet = state.accounts && state.accounts.length ? new Set(state.accounts.map(function(a) { return String(a).trim(); })) : null;
+    var categorySet = state.categories && state.categories.length ? new Set(state.categories.map(function(c) { return String(c).trim(); })) : null;
+
+    return list.filter(function(row) {
+      if (dateFrom != null) {
+        var rd = parseDateStr(row.date);
+        if (!rd || rd < dateFrom) return false;
+      }
+      if (dateTo != null) {
+        var rd2 = parseDateStr(row.date);
+        if (!rd2 || rd2 > dateTo) return false;
+      }
+      if (amountFrom != null && !isNaN(amountFrom)) {
+        var amt = parseFloat(String(row.amount).replace(/,/g, ""));
+        if (isNaN(amt) || amt < amountFrom) return false;
+      }
+      if (amountTo != null && !isNaN(amountTo)) {
+        var amt2 = parseFloat(String(row.amount).replace(/,/g, ""));
+        if (isNaN(amt2) || amt2 > amountTo) return false;
+      }
+      if (desc) {
+        if (!row.description || row.description.toLowerCase().indexOf(desc) === -1) return false;
+      }
+      if (accountSet && accountSet.size > 0) {
+        var a = (row.account || "").trim();
+        if (!accountSet.has(a)) return false;
+      }
+      if (categorySet && categorySet.size > 0) {
+        var c = (row.category || "").trim();
+        if (!categorySet.has(c)) return false;
+      }
+      return true;
+    });
+  }
+
+  function doSearch() {
+    syncStateFromUi();
+    if (!hasAnyCriteria()) {
+      setStatus("Set at least one criterion, then click Search.", false);
+      return;
+    }
+    setStatus("Updating criteria...", false);
+    var criteria = {
+      dateFrom: state.dateFrom,
+      dateTo: state.dateTo,
+      amountFrom: state.amountFrom,
+      amountTo: state.amountTo,
+      description: state.description,
+      accounts: state.accounts,
+      categories: state.categories
+    };
+    var criteriaStr = JSON.stringify(criteria);
+    var clientStart = Date.now();
+    google.script.run
+      .withSuccessHandler(function(result) {
+        var totalMs = Date.now() - clientStart;
+        var serverMs = (result && result.serverMs != null) ? result.serverMs : "?";
+        var timing = " (server: " + serverMs + " ms, round-trip: " + (totalMs / 1000).toFixed(1) + " s)";
+        var detail = (result && result.timingBreakdown) ? formatTimingBreakdown(result.timingBreakdown, totalMs, typeof serverMs === "number" ? serverMs : null) : "";
+        if (result && result.ok) {
+          var el = $("setupStatus");
+          if (el) el.style.display = "none";
+          setStatus((result.message || "Criteria updated.") + timing + detail, false);
+          if (result.applyUrl) {
+            try { window.top.location.href = result.applyUrl; } catch (e) { }
+          }
+        } else if (result && result.message && result.message.indexOf("not set up") !== -1) {
+          var setupEl = $("setupStatus");
+          if (setupEl) setupEl.style.display = "block";
+          var setupStart = Date.now();
+          google.script.run
+            .withSuccessHandler(function(r2) {
+              if (setupEl) setupEl.style.display = "none";
+              var setupTotal = Date.now() - setupStart;
+              if (r2 && r2.ok) {
+                var setupTotalMs = Date.now() - setupStart;
+                var setupDetail = (r2.timingBreakdown) ? formatTimingBreakdown(r2.timingBreakdown, setupTotalMs, r2.serverMs) : "";
+                setStatus("Setup complete. Criteria updated. (round-trip: " + (setupTotal / 1000).toFixed(1) + " s)" + setupDetail, false);
+                if (r2.applyUrl) {
+                  try { window.top.location.href = r2.applyUrl; } catch (e) { }
+                }
+              } else {
+                setStatus((r2 && r2.message) || "Error.", true);
+              }
+            })
+            .withFailureHandler(function(e) {
+              if (setupEl) setupEl.style.display = "none";
+              setStatus("Error: " + (e && e.message || "unknown"), true);
+            })
+            .applyQuickSearch(criteriaStr);
+        } else {
+          var el2 = $("setupStatus");
+          if (el2) el2.style.display = "none";
+          setStatus((result && result.message) || "Error." + timing, true);
+        }
+      })
+      .withFailureHandler(function(err) {
+        var el3 = $("setupStatus");
+        if (el3) el3.style.display = "none";
+        setStatus("Error: " + (err && (err.message || err.toString()) || "unknown"), true);
+      })
+      .writeQuickSearchCriteria(criteriaStr, true);
+  }
+
+  function resetSection(section) {
+    if (section === "date") {
+      state.dateFrom = '';
+      state.dateTo = '';
+      var df = $("dateFrom"), dt = $("dateTo");
+      if (df) df.value = '';
+      if (dt) dt.value = '';
+      var preset = $("datePreset");
+      if (preset) preset.value = '';
+    } else if (section === "amount") {
+      state.amountFrom = '';
+      state.amountTo = '';
+      var af = $("amountFrom"), at = $("amountTo");
+      if (af) af.value = '';
+      if (at) at.value = '';
+    } else if (section === "description") {
+      state.description = '';
+      var d = $("descContains");
+      if (d) d.value = '';
+    } else if (section === "account") {
+      state.accounts = [];
+      var panel = $("accountPanel");
+      if (panel) panel.querySelectorAll("input.account-opt").forEach(function(cb) { cb.checked = false; });
+      updateAccountTriggerText();
+    } else if (section === "category") {
+      state.categories = [];
+      renderCategoryList();
+    }
+    updateResetButtons();
+    updateSearchButton();
+    setStatus("", false);
+  }
+
+  function resetAll() {
+    state = { dateFrom: '', dateTo: '', amountFrom: '', amountTo: '', description: '', accounts: [], categories: [] };
+    var df = $("dateFrom"), dt = $("dateTo");
+    var af = $("amountFrom"), at = $("amountTo");
+    var desc = $("descContains");
+    if (df) df.value = '';
+    if (dt) dt.value = '';
+    var datePreset = $("datePreset");
+    if (datePreset) datePreset.value = '';
+    if (af) af.value = '';
+    if (at) at.value = '';
+    if (desc) desc.value = '';
+    var panel = $("accountPanel");
+    if (panel) panel.querySelectorAll("input.account-opt").forEach(function(cb) { cb.checked = false; });
+    updateAccountTriggerText();
+    renderCategoryList();
+    updateResetButtons();
+    updateSearchButton();
+    setStatus("Clearing criteria...", false);
+    var clientStart = Date.now();
+    google.script.run
+      .withSuccessHandler(function(result) {
+        var totalMs = Date.now() - clientStart;
+        var serverMs = (result && result.serverMs != null) ? result.serverMs : "?";
+        var timing = " (server: " + serverMs + " ms, round-trip: " + (totalMs / 1000).toFixed(1) + " s)";
+        var detail = (result && result.timingBreakdown) ? formatTimingBreakdown(result.timingBreakdown, totalMs, typeof result.serverMs === "number" ? result.serverMs : null) : "";
+        setStatus("All cleared." + timing + detail, false);
+      })
+      .withFailureHandler(function(err) {
+        setStatus("Error: " + (err && (err.message || err.toString()) || "unknown"), true);
+      })
+      .clearQuickSearch();
+  }
+
+  function init() {
+    $("searchBtn").onclick = doSearch;
+    $("resetAllBtn").onclick = resetAll;
+    ["resetDate", "resetAmount", "resetDescription", "resetAccount", "resetCategory"].forEach(function(id) {
+      var btn = $(id);
+      if (btn) btn.onclick = function() { resetSection(btn.getAttribute("data-section")); };
+    });
+    var descHelpLink = $("descRegexHelpLink");
+    var descHelpBlock = $("descRegexHelp");
+    if (descHelpLink && descHelpBlock) {
+      descHelpLink.addEventListener("click", function(e) {
+        e.preventDefault();
+        var show = descHelpBlock.style.display === "none";
+        descHelpBlock.style.display = show ? "block" : "none";
+      });
+    }
+    $("dateFrom").addEventListener("change", function() { syncStateFromUi(); updateResetButtons(); updateSearchButton(); });
+    $("dateTo").addEventListener("change", function() { syncStateFromUi(); updateResetButtons(); updateSearchButton(); });
+    var datePresetEl = $("datePreset");
+    if (datePresetEl) {
+      datePresetEl.addEventListener("change", function() {
+        var range = getPresetDateRange(datePresetEl.value);
+        if (range) {
+          var df = $("dateFrom"), dt = $("dateTo");
+          if (df) { df.value = range.from; state.dateFrom = range.from; }
+          if (dt) { dt.value = range.to; state.dateTo = range.to; }
+        } else {
+          var df = $("dateFrom"), dt = $("dateTo");
+          if (df) { df.value = ""; state.dateFrom = ""; }
+          if (dt) { dt.value = ""; state.dateTo = ""; }
+        }
+        updateResetButtons();
+        updateSearchButton();
+      });
+    }
+    $("amountFrom").addEventListener("input", function() { syncStateFromUi(); updateResetButtons(); updateSearchButton(); });
+    $("amountTo").addEventListener("input", function() { syncStateFromUi(); updateResetButtons(); updateSearchButton(); });
+    $("descContains").addEventListener("input", function() { syncStateFromUi(); updateResetButtons(); updateSearchButton(); });
+
+    document.addEventListener("keydown", function(e) {
+      if ((e.key === "Enter" || e.keyCode === 13) && e.target && !e.target.closest("#descRegexHelp")) {
+        var inPanel = e.target.closest("#quickSearchPanel");
+        var inActions = e.target.closest(".quick-search-actions");
+        if (inPanel || inActions) {
+          e.preventDefault();
+          doSearch();
+        }
+      }
+    });
+
+    setStatus("Loading...", false);
+    google.script.run
+      .withSuccessHandler(function(data) {
+        options = { categories: data.categories || [], accounts: data.accounts || [] };
+        fillAccountSelect();
+        renderCategoryList();
+        updateResetButtons();
+        updateSearchButton();
+        setStatus("", false);
+      })
+      .withFailureHandler(function(err) {
+        setStatus("Load failed: " + (err && (err.message || err.toString()) || "unknown"), true);
+      })
+      .getQuickSearchOptions();
+  }
+
+  document.addEventListener("DOMContentLoaded", function() { init(); });
+</script>
