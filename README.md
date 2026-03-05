@@ -1,7 +1,8 @@
 # Tiller Quick Search
 
-A Google Apps Script sidebar for **Tiller** spreadsheets that adds a Quick Search panel. Filter your Transactions sheet by date, amount, description, account, and category. Quick Search uses your sheet’s normal basic filter and two helper columns (Match and Criteria) so you can combine its results with any other filter criteria you set directly on the sheet.
+A Google Apps Script sidebar for **Tiller** (https://tiller.com/) spreadsheets that adds a Quick Search panel. Filter your Transactions sheet by date, amount, description, account, and category. Quick Search uses your sheet’s normal basic filter and two helper columns (Match and Criteria) so you can combine its results with any other filter criteria you set directly on the sheet.
 
+This search function is produced by a Tiller user, and is not associated with Tiller corporation.
 ---
 
 ## What you need
