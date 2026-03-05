@@ -2,7 +2,24 @@
 
 A Google Apps Script sidebar for **Tiller** (https://tiller.com/) spreadsheets that adds a Quick Search panel. Filter your Transactions sheet by date, amount, description, account, and category. Quick Search uses your sheet’s normal basic filter and two helper columns (Match and Criteria) so you can combine its results with any other filter criteria you set directly on the sheet.
 
+## Key features
+
+**Search by:**
+- **Date** – range or exact From / To
+- **Amount** – min and max
+- **Description** – “contains” text, with options like:
+  - `Amazon | Walmart` – rows containing Amazon or Walmart
+  - `^Vanguard` – name starts with Vanguard
+  - `1234$` – name ends with 1234
+  - `^Gas$` – exactly “Gas” (no “Gasoline”)
+  - `Amazon.*Return|Return.*Amazon` – contains both Amazon and Return (any order)
+  - `gas but not chevron` – contains “gas” but not “chevron”
+- **Account** – choose one or more
+- **Category** – one or more categories, sorted by group
+- See all of your search criteria at once in the sidebar
+
 This search function is produced by a Tiller user, and is not associated with Tiller corporation.
+
 ---
 
 ## What you need
@@ -124,3 +141,11 @@ Your Transactions sheet must have columns that match what Tiller uses (e.g. Date
 - Open **Tiller Tools** → **Quick Search**, set date range, amount, description, account, and/or category, then click **Search**.
 - Use **Reset All** or the **×** next to each section to clear criteria.
 - In **Description**, you can use plain text or simple **regex** (e.g. `Amazon|Walmart` for “Amazon or Walmart”). Use **` but not `** (with spaces) to require one phrase and exclude another (e.g. `gas but not chevron`). Click the **Description** label in the sidebar for examples.
+
+---
+
+## To Uninstall
+
+1. **Remove the menu and script files:** Open **Extensions** → **Apps Script**. Remove the **onOpen** code (or the Tiller Tools menu line) from **Code.gs** so the “Tiller Tools” menu no longer appears. Delete the **QuickSearchSidebar.gs** and **QuickSearch.html** files from the project if you no longer need them.
+2. **Optional – remove the helper columns:** On your **Transactions** sheet, delete the **QuickSearch** and **QuickCriteria** columns if they were added. You can delete them like any other columns (right‑click the column letter → Delete column).
+3. **Optional – clear the filter:** If a filter is still applied to the Transactions sheet, turn it off via **Data** → **Turn off filter** (or use the filter icon in the toolbar).
