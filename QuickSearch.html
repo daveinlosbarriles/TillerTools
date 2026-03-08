@@ -268,6 +268,16 @@
   .category-section .section-title-row {
     flex-shrink: 0;
   }
+  .category-section .category-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .category-section .category-find-input {
+    flex: 1;
+    min-width: 0;
+    box-sizing: border-box;
+  }
   .category-list-wrap {
     flex: 1;
     min-height: 120px;
@@ -424,8 +434,9 @@
   </div>
 
   <div class="section category-section">
-    <div class="section-title-row">
+    <div class="section-title-row category-title-row">
       <span class="section-title">Category</span>
+      <input type="text" id="categoryFind" class="category-find-input" placeholder="Type to filter list below">
       <button type="button" class="reset-section-btn" id="resetCategory" data-section="category" title="Clear category">×</button>
     </div>
     <div id="categoryListWrap" class="category-list-wrap"></div>
@@ -525,6 +536,25 @@
     }
   }
 
+  function filterCategoryList() {
+    var wrap = $("categoryListWrap");
+    var findEl = $("categoryFind");
+    if (!wrap || !findEl) return;
+    var q = (findEl.value || "").trim().toLowerCase();
+    wrap.querySelectorAll(".cat-row").forEach(function(row) {
+      if (!q) {
+        row.style.display = "";
+        return;
+      }
+      var nameEl = row.querySelector(".cat-name");
+      var groupEl = row.querySelector(".cat-group");
+      var name = (nameEl && nameEl.textContent) ? nameEl.textContent : "";
+      var group = (groupEl && groupEl.textContent) ? groupEl.textContent : "";
+      var combined = (name + " " + group).toLowerCase();
+      row.style.display = combined.indexOf(q) !== -1 ? "" : "none";
+    });
+  }
+
   function renderCategoryList() {
     var wrap = $("categoryListWrap");
     if (!wrap) return;
@@ -546,6 +576,7 @@
         updateSearchButton();
       });
     });
+    filterCategoryList();
   }
 
   function getAccountTriggerText() {
@@ -808,6 +839,8 @@
       updateAccountTriggerText();
     } else if (section === "category") {
       state.categories = [];
+      var findEl = $("categoryFind");
+      if (findEl) findEl.value = "";
       renderCategoryList();
     }
     updateResetButtons();
@@ -830,6 +863,8 @@
     var panel = $("accountPanel");
     if (panel) panel.querySelectorAll("input.account-opt").forEach(function(cb) { cb.checked = false; });
     updateAccountTriggerText();
+    var categoryFindEl = $("categoryFind");
+    if (categoryFindEl) categoryFindEl.value = "";
     renderCategoryList();
     updateResetButtons();
     updateSearchButton();
@@ -856,6 +891,10 @@
       var btn = $(id);
       if (btn) btn.onclick = function() { resetSection(btn.getAttribute("data-section")); };
     });
+    var categoryFindEl = $("categoryFind");
+    if (categoryFindEl) {
+      categoryFindEl.addEventListener("input", filterCategoryList);
+    }
     var descHelpLink = $("descRegexHelpLink");
     var descHelpBlock = $("descRegexHelp");
     if (descHelpLink && descHelpBlock) {
