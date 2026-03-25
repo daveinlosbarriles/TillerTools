@@ -1,4 +1,4 @@
-# Tiller(TM) Tools
+# Tiller Tools
 
 One GitHub repo and Apps Script project for **Tiller** (https://tiller.com/) spreadsheets:
 
