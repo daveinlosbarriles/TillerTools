@@ -515,7 +515,8 @@ function applyQuickSearchBasicFilter(sheet, criteriaColIndex, lastRow) {
 
   if (filter) {
     var existingRange = filter.getRange();
-    if (existingRange.getLastColumn() < criteriaColIndex) {
+    var dataLastRow = Math.max(sheet.getLastRow(), ROW_DATA_FIRST);
+    if (existingRange.getLastColumn() < criteriaColIndex || existingRange.getLastRow() < dataLastRow) {
       try { filter.remove(); } catch (e) { /* ignore */ }
       filter = null;
     }
@@ -562,6 +563,19 @@ function refreshQuickSearchFilterView(sheet, criteriaColIndex, spreadsheetId, sh
   var filter = sheet.getFilter();
   timing.getFilterMs = Date.now() - t0;
 
+  var dataLastRow = Math.max(sheet.getLastRow(), ROW_DATA_FIRST);
+  if (filter) {
+    try {
+      var fr = filter.getRange();
+      if (fr.getLastRow() < dataLastRow || fr.getLastColumn() < criteriaColIndex) {
+        try {
+          filter.remove();
+        } catch (eRm) { /* ignore */ }
+        filter = null;
+      }
+    } catch (eR) { /* ignore */ }
+  }
+
   if (filter) {
     var t1 = Date.now();
     try { filter.setColumnFilterCriteria(matchCol1Based, criteria); } catch (e) { /* ignore */ }
@@ -576,7 +590,7 @@ function refreshQuickSearchFilterView(sheet, criteriaColIndex, spreadsheetId, sh
   }
 
   var t2 = Date.now();
-  var lastRow = getQuickSearchSheetGridRowCount(spreadsheetId, sheetId);
+  var lastRow = getQuickSearchSheetGridRowCount(spreadsheetId, sheetId, sheet);
   timing.getLastRowMs = Date.now() - t2;
 
   var filterRange = sheet.getRange(ROW_HEADER, COL_FIRST, lastRow, criteriaColIndex);
@@ -719,19 +733,24 @@ function clearQuickSearch() {
 }
 
 /**
- * Returns grid row count for the given sheet via Sheets API (fast metadata read, no sheet scan).
- * Use for filter range; often faster than sheet.getLastRow() on large sheets.
+ * Row count for the filter data range: max of Sheets API grid rowCount and sheet.getLastRow().
+ * Avoids returning 2 on API failure (that used to create a 2-row basic filter with no effect on real data).
+ * @param {string} spreadsheetId
+ * @param {number} sheetId
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
  */
-function getQuickSearchSheetGridRowCount(spreadsheetId, sheetId) {
+function getQuickSearchSheetGridRowCount(spreadsheetId, sheetId, sheet) {
+  var fallback = sheet ? Math.max(sheet.getLastRow(), ROW_DATA_FIRST) : ROW_DATA_FIRST;
   try {
     var spread = Sheets.Spreadsheets.get(spreadsheetId, { fields: "sheets(properties(sheetId,gridProperties(rowCount)))" });
     var sheets = spread.sheets || [];
     for (var i = 0; i < sheets.length; i++) {
       if (sheets[i].properties && Number(sheets[i].properties.sheetId) === Number(sheetId)) {
         var rc = sheets[i].properties.gridProperties ? sheets[i].properties.gridProperties.rowCount : undefined;
-        return Math.max(rc || ROW_DATA_FIRST, ROW_DATA_FIRST);
+        var gridRows = Math.max(rc != null ? Number(rc) : 0, ROW_DATA_FIRST);
+        return Math.max(gridRows, fallback);
       }
     }
   } catch (e) { /* ignore */ }
-  return 2;
+  return fallback;
 }
