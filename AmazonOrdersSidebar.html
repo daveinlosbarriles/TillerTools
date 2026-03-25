@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <base target="_top">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
   <style>
     html, body {
       margin: 0;
@@ -73,6 +74,24 @@
     ul.files { margin: 2px 0 4px 0; padding-left: 18px; }
     .cb-list label { font-weight: normal; display: flex; align-items: flex-start; gap: 6px; margin: 3px 0; line-height: 1.3; }
     .cb-list input { width: auto; margin-top: 2px; }
+    input[type="checkbox"] {
+      accent-color: #1a73e8;
+      cursor: pointer;
+    }
+    .cb-primary-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: normal;
+      cursor: pointer;
+      color: #333;
+      margin: 0;
+    }
+    .import-action-row {
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 14px;
+    }
     .pay-miss { font-size: 12px; margin: 4px 0; padding: 4px 6px; background: rgba(255, 248, 225, 0.85); border: 1px solid #ffe082; border-radius: 2px; }
     a { color: #1a73e8; }
     .welcome-banner {
@@ -193,12 +212,12 @@
       <label style="font-weight:normal;"><input type="checkbox" id="cbVerifyPaymentMethods" checked /> Check for new payment methods</label>
     </div>
 
-    <div class="btn-row">
+    <div class="btn-row" id="nextOnlyRow">
       <button type="button" id="btnNext2" class="primary">Next</button>
     </div>
   </div>
 
-  <!-- Panel C: payment methods + import -->
+  <!-- Panel C: payment methods only (no import control here) -->
   <div id="panelPayment" class="panel panel-hidden">
     <div id="payMethodsTitleRow" class="row-with-help" style="display:none;">
       <div class="main-col">
@@ -211,11 +230,14 @@
     </div>
     <div id="payPanel"></div>
     <p id="payAccountHint" class="hint" style="display:none; margin-top:10px;">Update any incorrect or <strong>Unknown</strong> account information on the <strong>AMZ Import</strong> tab before clicking Import.</p>
-    <div class="btn-row">
-      <button type="button" id="btnImport" class="primary" style="display:none;">Import</button>
-    </div>
-    <p id="importWarnTime" class="warn-time" style="display:none; margin-top:8px;">This process may take up to 2 minutes for large Tiller and Amazon files.</p>
   </div>
+
+  <!-- After payment table / files: single Import (same runAmazonImport for all paths). -->
+  <div class="btn-row import-action-row" id="importActionRow" style="display: none;">
+    <button type="button" id="btnImport" class="primary">Import</button>
+    <label class="cb-primary-label"><input type="checkbox" id="cbShowDebug" /> Show debug messages</label>
+  </div>
+  <p id="importWarnTime" class="warn-time" style="display:none; margin-top:8px;">This process may take up to 2 minutes for large Tiller and Amazon files.</p>
 
   <!-- Panel D: status -->
   <div id="panelStatus" class="panel panel-hidden">
@@ -225,7 +247,7 @@
     </div>
     <div id="successBlock" class="success-block" style="display:none;"></div>
     <div class="btn-row">
-      <button type="button" id="btnStartOver">Start over</button>
+      <button type="button" id="btnStartOver" style="display: none;">Start over</button>
     </div>
   </div>
 
@@ -242,6 +264,166 @@
       };
 
       function $(id) { return document.getElementById(id); }
+
+      /**
+       * No-cutoff: trim OH/DO CSV to this many days before ZIP anchor (payload size).
+       * With cutoff + refunds/returns: same value extends OH/DO transmit min date earlier for payment join only
+       * (server still inserts orders only on/after lookback).
+       */
+      var AMZ_OH_DO_ANCHOR_TRIM_DAYS = 45;
+
+      function stripTimeLocal(d) {
+        if (!d || isNaN(d.getTime())) return null;
+        return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      }
+
+      function parseCutoffDateFromInput(iso) {
+        if (!iso || String(iso).trim() === "") return null;
+        var d = new Date(String(iso).trim() + "T12:00:00");
+        return isNaN(d.getTime()) ? null : d;
+      }
+
+      function parseAmazonDateCell(raw) {
+        if (raw == null || String(raw).trim() === "") return null;
+        var d = new Date(raw);
+        return isNaN(d.getTime()) ? null : d;
+      }
+
+      function findHeaderIndex(headers, name) {
+        var target = String(name).trim();
+        for (var j = 0; j < headers.length; j++) {
+          if (String(headers[j] == null ? "" : headers[j]).trim() === target) return j;
+        }
+        return -1;
+      }
+
+      function maxDateInCsvColumn(csvText, dateColumnName) {
+        if (!csvText || typeof Papa === "undefined") return null;
+        var parsed = Papa.parse(csvText, { skipEmptyLines: false });
+        if (!parsed.data || !parsed.data.length) return null;
+        var rows = parsed.data;
+        var idx = findHeaderIndex(rows[0], dateColumnName);
+        if (idx < 0) return null;
+        var max = null;
+        for (var i = 1; i < rows.length; i++) {
+          var r = rows[i];
+          if (!r || idx >= r.length) continue;
+          var dt = parseAmazonDateCell(r[idx]);
+          if (!dt) continue;
+          var sd = stripTimeLocal(dt);
+          if (!sd) continue;
+          if (!max || sd > max) max = sd;
+        }
+        return max;
+      }
+
+      function computeTransmitAnchorDate(rawFiles) {
+        var ts = [];
+        function push(csv, col) {
+          if (!csv) return;
+          var m = maxDateInCsvColumn(csv, col);
+          if (m) ts.push(m.getTime());
+        }
+        if (($("cbPhysical").checked || $("cbWF").checked) && rawFiles.orderHistory) push(rawFiles.orderHistory, "Order Date");
+        if ($("cbDigital").checked && rawFiles.digitalOrders) push(rawFiles.digitalOrders, "Order Date");
+        if ($("cbRefund").checked && rawFiles.refundDetails) push(rawFiles.refundDetails, "Refund Date");
+        if ($("cbDigRet").checked && rawFiles.digitalReturns) push(rawFiles.digitalReturns, "Return Date");
+        if (!ts.length) return stripTimeLocal(new Date());
+        return new Date(Math.max.apply(null, ts));
+      }
+
+      /**
+       * OH/DO CSV min Order Date for transmit trim.
+       * With cutoff: start of lookback calendar day (server insert floor), optionally minus priorDaysPad calendar days
+       * so Refund Details / Digital Returns can resolve Payment Method from older orders without transmitting extra refund rows.
+       * Without cutoff: anchor minus AMZ_OH_DO_ANCHOR_TRIM_DAYS.
+       * @param {Date|null} cutoffDate
+       * @param {Date|null} anchorDate
+       * @param {number} [priorDaysPad=0]
+       */
+      function minOrderDateForOhDoUpload(cutoffDate, anchorDate, priorDaysPad) {
+        var pad = typeof priorDaysPad === "number" && priorDaysPad > 0 ? Math.floor(priorDaysPad) : 0;
+        if (cutoffDate) {
+          var d0 = stripTimeLocal(cutoffDate);
+          if (!d0) return null;
+          if (!pad) return d0;
+          return new Date(d0.getFullYear(), d0.getMonth(), d0.getDate() - pad);
+        }
+        var anchor = anchorDate ? stripTimeLocal(anchorDate) : stripTimeLocal(new Date());
+        if (!anchor) anchor = stripTimeLocal(new Date());
+        return new Date(
+          anchor.getFullYear(),
+          anchor.getMonth(),
+          anchor.getDate() - AMZ_OH_DO_ANCHOR_TRIM_DAYS
+        );
+      }
+
+      function trimCsvRowsByMinDate(csvText, dateColumnName, minDate) {
+        if (!csvText || !minDate || typeof Papa === "undefined") return csvText;
+        var parsed = Papa.parse(csvText, { skipEmptyLines: false });
+        if (parsed.errors && parsed.errors.length) return csvText;
+        var rows = parsed.data;
+        if (!rows || rows.length < 1) return csvText;
+        var idx = findHeaderIndex(rows[0], dateColumnName);
+        if (idx < 0) return csvText;
+        var minD = stripTimeLocal(minDate);
+        if (!minD) return csvText;
+        var minTime = minD.getTime();
+        var out = [rows[0]];
+        for (var i = 1; i < rows.length; i++) {
+          var r = rows[i];
+          if (!r || !r.length) continue;
+          var dt = parseAmazonDateCell(r[idx]);
+          if (!dt) {
+            out.push(r);
+            continue;
+          }
+          var sd = stripTimeLocal(dt);
+          if (!sd) {
+            out.push(r);
+            continue;
+          }
+          if (sd.getTime() >= minTime) out.push(r);
+        }
+        return Papa.unparse(out);
+      }
+
+      /** Smaller CSV texts for google.script.run (raw ZIP strings unchanged in state.files). */
+      function buildTransmitFiles(rawFiles) {
+        if (!rawFiles) rawFiles = state.files;
+        var out = {
+          orderHistory: rawFiles.orderHistory,
+          digitalOrders: rawFiles.digitalOrders,
+          digitalReturns: rawFiles.digitalReturns,
+          refundDetails: rawFiles.refundDetails
+        };
+        if (typeof Papa === "undefined") return out;
+        var anchor = computeTransmitAnchorDate(rawFiles);
+        var cutoff = parseCutoffDateFromInput($("cutoff").value);
+        var runOH = $("cbPhysical").checked || $("cbWF").checked;
+        var padOHJoin =
+          cutoff && $("cbRefund").checked ? AMZ_OH_DO_ANCHOR_TRIM_DAYS : 0;
+        var padDOJoin =
+          cutoff && $("cbDigRet").checked ? AMZ_OH_DO_ANCHOR_TRIM_DAYS : 0;
+
+        if (rawFiles.orderHistory && (runOH || $("cbRefund").checked)) {
+          var minOH = minOrderDateForOhDoUpload(cutoff, anchor, padOHJoin);
+          if (minOH) out.orderHistory = trimCsvRowsByMinDate(rawFiles.orderHistory, "Order Date", minOH);
+        }
+        if (rawFiles.digitalOrders && ($("cbDigital").checked || $("cbDigRet").checked)) {
+          var minDO = minOrderDateForOhDoUpload(cutoff, anchor, padDOJoin);
+          if (minDO) out.digitalOrders = trimCsvRowsByMinDate(rawFiles.digitalOrders, "Order Date", minDO);
+        }
+        if (rawFiles.refundDetails && $("cbRefund").checked && cutoff) {
+          out.refundDetails = trimCsvRowsByMinDate(rawFiles.refundDetails, "Refund Date", stripTimeLocal(cutoff));
+        }
+        if (rawFiles.digitalReturns && $("cbDigRet").checked && cutoff) {
+          out.digitalReturns = trimCsvRowsByMinDate(rawFiles.digitalReturns, "Return Date", stripTimeLocal(cutoff));
+        }
+        if (typeof console !== "undefined" && console.log) console.log("[AMZ import] CSV bytes raw→transmit: OH " + (rawFiles.orderHistory || "").length + "→" + (out.orderHistory || "").length + " DO " + (rawFiles.digitalOrders || "").length + "→" + (out.digitalOrders || "").length + " refund " + (rawFiles.refundDetails || "").length + "→" + (out.refundDetails || "").length + " digRet " + (rawFiles.digitalReturns || "").length + "→" + (out.digitalReturns || "").length);
+        return out;
+      }
+
       function updatePayAccountHintVisibility(data) {
         var rows = data && data.paymentRows ? data.paymentRows : [];
         $("payAccountHint").style.display = rows.length ? "block" : "none";
@@ -251,12 +433,33 @@
         if (t) t.style.display = show ? "flex" : "none";
       }
       function showImportButton(show) {
-        var b = $("btnImport");
-        if (b) b.style.display = show ? "inline-block" : "none";
+        var row = $("importActionRow");
+        if (row) row.style.display = show ? "flex" : "none";
       }
-      function refreshNext2ButtonLabel() {
+      /**
+       * Verify on: Next only; payment panel hidden until Next; unified Import hidden until analysis completes.
+       * Verify off: ignore payment panel; unified Import + debug visible.
+       */
+      function refreshPaymentVerifyImportUi() {
         var verify = $("cbVerifyPaymentMethods") && $("cbVerifyPaymentMethods").checked;
-        $("btnNext2").textContent = verify ? "Next" : "Import";
+        var nextRow = $("nextOnlyRow");
+        var unified = $("importActionRow");
+        var warn = $("importWarnTime");
+
+        if (nextRow) nextRow.style.display = verify ? "flex" : "none";
+
+        $("panelPayment").classList.add("panel-hidden");
+        $("payPanel").innerHTML = "";
+        updatePayAccountHintVisibility(null);
+        showPayMethodsTitle(false);
+        state.payAnalysis = null;
+        if (warn) warn.style.display = "none";
+
+        if (!verify) {
+          if (unified) unified.style.display = "flex";
+        } else {
+          if (unified) unified.style.display = "none";
+        }
       }
       function runAmazonImport() {
         var w = $("importWarnTime");
@@ -265,6 +468,7 @@
         $("log").textContent = "";
         $("successBlock").style.display = "none";
         $("successBlock").textContent = "";
+        $("btnStartOver").style.display = "none";
         log("Starting import…");
 
         var runOH = $("cbPhysical").checked || $("cbWF").checked;
@@ -277,9 +481,12 @@
         if (!steps.length) {
           log("No import steps were run. Select at least one order type and ensure the ZIP contains the matching CSV(s).");
           $("panelStatus").scrollIntoView({ behavior: "smooth", block: "nearest" });
+          $("btnStartOver").style.display = "inline-block";
           return;
         }
 
+        var importT0 = Date.now();
+        var tf = buildTransmitFiles(state.files);
         var ts = null;
         var anyImport = false;
         var qi = 0;
@@ -301,16 +508,26 @@
         function showImportDone() {
           log("");
           log("=== Import finished ===");
+          var sec = (Date.now() - importT0) / 1000;
+          var rounded = Math.round(sec * 10) / 10;
+          log("Total time: " + rounded + " s");
+          google.script.run.withFailureHandler(function () {}).amzNotifyImportBundleFinished(rounded, true, "");
           $("successBlock").style.display = "block";
           $("successBlock").innerHTML =
             "Your transactions have been imported, and are visible on the <strong>Transactions</strong> sheet.<br><br>" +
             "If you want to reverse this import, just delete the individual transactions now showing on the Transactions sheet.";
           $("panelStatus").scrollIntoView({ behavior: "smooth", block: "nearest" });
+          $("btnStartOver").style.display = "inline-block";
         }
 
         function failImport(err) {
-          log("Server error: " + (err && err.message ? err.message : String(err)));
+          var msg = err && err.message ? err.message : String(err);
+          var sec = (Date.now() - importT0) / 1000;
+          var rounded = Math.round(sec * 10) / 10;
+          google.script.run.withFailureHandler(function () {}).amzNotifyImportBundleFinished(rounded, false, msg);
+          log("Server error: " + msg);
           $("panelStatus").scrollIntoView({ behavior: "smooth", block: "nearest" });
+          $("btnStartOver").style.display = "inline-block";
         }
 
         function runFinalize() {
@@ -319,7 +536,10 @@
           google.script.run
             .withSuccessHandler(function (res) {
               if (res && res.bundleImportTimestampIso) ts = res.bundleImportTimestampIso;
-              if (res && res.log) log(String(res.log));
+              if (res && res.log) {
+                var finLog = filterServerImportLogForDisplay(String(res.log), isImportDebugEnabled());
+                if (finLog) log(finLog);
+              }
               showImportDone();
             })
             .withFailureHandler(failImport)
@@ -335,15 +555,15 @@
           var step = steps[qi++];
           var p = basePayload();
           p.step = step;
-          if (step === "orderHistory") p.orderHistoryCsv = state.files.orderHistory;
-          if (step === "digitalOrders") p.digitalOrdersCsv = state.files.digitalOrders;
+          if (step === "orderHistory") p.orderHistoryCsv = tf.orderHistory;
+          if (step === "digitalOrders") p.digitalOrdersCsv = tf.digitalOrders;
           if (step === "digitalReturns") {
-            p.digitalReturnsCsv = state.files.digitalReturns;
-            p.digitalOrdersCsv = state.files.digitalOrders;
+            p.digitalReturnsCsv = tf.digitalReturns;
+            p.digitalOrdersCsv = tf.digitalOrders;
           }
           if (step === "refundDetails") {
-            p.refundDetailsCsv = state.files.refundDetails;
-            p.orderHistoryCsv = state.files.orderHistory;
+            p.refundDetailsCsv = tf.refundDetails;
+            p.orderHistoryCsv = tf.orderHistory;
           }
 
           google.script.run
@@ -354,7 +574,10 @@
               }
               if (res.bundleImportTimestampIso) ts = res.bundleImportTimestampIso;
               if (res.didImport) anyImport = true;
-              if (res.log) log(String(res.log));
+              if (res.log) {
+                var chunkLog = filterServerImportLogForDisplay(String(res.log), isImportDebugEnabled());
+                if (chunkLog) log(chunkLog);
+              }
               pump();
             })
             .withFailureHandler(failImport)
@@ -362,6 +585,28 @@
         }
 
         pump();
+      }
+      /**
+       * When showDebug is false, drop verbose server timing, column maps, and sample cell lines.
+       * When true, show full server log (timings, column indexes, etc.).
+       */
+      function filterServerImportLogForDisplay(raw, showDebug) {
+        if (showDebug) return String(raw || "").replace(/\r/g, "\n");
+        return String(raw || "")
+          .split(/\r\n|\r|\n/)
+          .filter(function (line) {
+            var s = line;
+            if (/^\s*Server:\s/.test(s) && !/^\s*Server:\s*sort\s+sheet\b/i.test(s)) return false;
+            if (/^\s*Detected file type:\s/.test(s)) return false;
+            if (/\d+\s+order\(s\)\s+had\s+a\s+net\s+total\s+of\s+\$0\b/.test(s)) return false;
+            return true;
+          })
+          .join("\n");
+      }
+
+      function isImportDebugEnabled() {
+        var a = $("cbShowDebug");
+        return !!(a && a.checked);
       }
       function log(msg) {
         var el = $("log");
@@ -470,14 +715,16 @@
       function runPaymentAnalysisThenMaybeInsert() {
         var incP = $("cbPhysical").checked;
         var incWf = $("cbWF").checked;
-        var oh = state.files.orderHistory;
+        var rawOh = state.files.orderHistory;
+        var tf = buildTransmitFiles(state.files);
+        var oh = tf.orderHistory;
         var cutoff = $("cutoff").value;
         $("payPanel").innerHTML = "<p>Scanning Amazon files for payment methods…</p>";
         updatePayAccountHintVisibility(null);
         showPayMethodsTitle(false);
         showImportButton(false);
 
-        if (!(incP || incWf) || !oh) {
+        if (!(incP || incWf) || !rawOh) {
           $("payPanel").innerHTML = "<p class=\"pay-miss\">Order History is not included or physical/Whole Foods filters exclude it — skipped payment analysis.</p>";
           state.payAnalysis = { ok: true, paymentRows: [], missing: [] };
           updatePayAccountHintVisibility(state.payAnalysis);
@@ -613,6 +860,7 @@
             });
             $("btnNext1").disabled = false;
             $("panelFiles").classList.remove("panel-hidden");
+            refreshPaymentVerifyImportUi();
             $("panelFiles").scrollIntoView({ behavior: "smooth", block: "nearest" });
           }).catch(function (err) {
             alert("Could not read ZIP: " + (err && err.message ? err.message : err));
@@ -626,17 +874,14 @@
         reader.readAsArrayBuffer(f);
       });
 
-      $("cbVerifyPaymentMethods").addEventListener("change", refreshNext2ButtonLabel);
-      refreshNext2ButtonLabel();
+      $("cbVerifyPaymentMethods").addEventListener("change", refreshPaymentVerifyImportUi);
+      refreshPaymentVerifyImportUi();
 
       $("btnNext2").addEventListener("click", function () {
-        if ($("cbVerifyPaymentMethods").checked) {
-          $("panelPayment").classList.remove("panel-hidden");
-          runPaymentAnalysisThenMaybeInsert();
-          $("panelPayment").scrollIntoView({ behavior: "smooth", block: "nearest" });
-        } else {
-          runAmazonImport();
-        }
+        if (!$("cbVerifyPaymentMethods").checked) return;
+        $("panelPayment").classList.remove("panel-hidden");
+        runPaymentAnalysisThenMaybeInsert();
+        $("panelPayment").scrollIntoView({ behavior: "smooth", block: "nearest" });
       });
 
       $("btnImport").addEventListener("click", runAmazonImport);
@@ -648,13 +893,14 @@
         $("zipFileName").textContent = "No file selected";
         $("btnNext1").disabled = true;
         if ($("cbVerifyPaymentMethods")) $("cbVerifyPaymentMethods").checked = true;
-        refreshNext2ButtonLabel();
+        refreshPaymentVerifyImportUi();
         $("payPanel").innerHTML = "";
         updatePayAccountHintVisibility(null);
         showPayMethodsTitle(false);
         showImportButton(false);
         $("log").textContent = "";
         $("successBlock").style.display = "none";
+        $("btnStartOver").style.display = "none";
         var w = $("importWarnTime");
         if (w) w.style.display = "none";
         $("panelFiles").classList.add("panel-hidden");
@@ -664,6 +910,8 @@
         document.querySelectorAll(".help-toggle").forEach(function (b) { b.setAttribute("aria-expanded", "false"); });
         window.scrollTo(0, 0);
       });
+
+      if ($("cbShowDebug")) $("cbShowDebug").checked = false;
     })();
   </script>
 </body>

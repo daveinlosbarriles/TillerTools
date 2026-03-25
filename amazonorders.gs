@@ -168,6 +168,68 @@ const AMZ_ZIP_DIGITAL_ORDERS = "digital content orders.csv";
 const AMZ_ZIP_DIGITAL_RETURNS = "digital returns.csv";
 const AMZ_ZIP_REFUND_DETAILS = "refund details.csv";
 
+/** Digital refund / digital return main-row label (Description + Full Description). */
+const AMZ_DESC_DIGITAL_REFUND = "[AMZD] Refund";
+
+function amzFormatPhysicalRefundDescription_() {
+  return "[AMZ]  Refund";
+}
+
+/** Full Description includes Order ID (short Description does not). */
+function amzFormatPhysicalRefundFullDescription_(orderId) {
+  const oid = String(orderId == null ? "" : orderId).trim();
+  return amzFormatPhysicalRefundDescription_() + " Order ID " + oid;
+}
+
+function amzFormatPhysicalRefundOffsetLine_(orderId) {
+  const oid = String(orderId == null ? "" : orderId).trim();
+  return "[AMZ]  Refund offset Order ID " + oid;
+}
+
+/**
+ * Prefix for imported purchase lines: [AMZD] + one space, or [AMZ] + two spaces so "Order ID …" aligns.
+ * @param {boolean} isDigital
+ * @returns {string}
+ */
+function amzPurchaseLinePrefix_(isDigital) {
+  return isDigital ? "[AMZD] " : "[AMZ]  ";
+}
+
+/** Description column only: prefix + product title (no Order ID or ASIN). */
+function amzFormatPurchaseDescription_(isDigital, productName) {
+  const pn = String(productName == null ? "" : productName).trim();
+  return amzPurchaseLinePrefix_(isDigital) + pn;
+}
+
+/** Full Description: prefix + Order ID + title + ASIN. */
+function amzFormatPurchaseFullDescription_(isDigital, orderId, productName, asin) {
+  const oid = String(orderId == null ? "" : orderId).trim();
+  const pn = String(productName == null ? "" : productName).trim();
+  const a = String(asin == null ? "" : asin).trim();
+  return (
+    amzPurchaseLinePrefix_(isDigital) +
+    "Order ID " +
+    oid +
+    ": " +
+    pn +
+    " (" +
+    a +
+    ")"
+  );
+}
+
+/** Purchase balancing offset row (same string for Description and Full Description). */
+function amzFormatPurchaseOffsetLine_(isDigital, orderId) {
+  const oid = String(orderId == null ? "" : orderId).trim();
+  return amzPurchaseLinePrefix_(isDigital) + "Purchase offset Order ID " + oid;
+}
+
+/** Digital returns balancing offset (same string for Description and Full Description). */
+function amzFormatDigitalReturnOffsetLine_(orderId) {
+  const oid = String(orderId == null ? "" : orderId).trim();
+  return amzPurchaseLinePrefix_(true) + "Return offset Order ID " + oid;
+}
+
 function amzGenerateGuid() {
   return Utilities.getUuid();
 }
@@ -268,6 +330,131 @@ function amzParseImportTimestampToDate(s) {
     Number(m[5]),
     Number(m[6])
   );
+}
+
+/**
+ * Strip BOM, Excel text apostrophe, outer quotes, and formula-style wrappers so date strings parse.
+ * @param {*} raw
+ * @returns {string}
+ */
+function amzNormalizeAmazonCsvDateString_(raw) {
+  let s = String(raw == null ? "" : raw).trim();
+  if (!s) return "";
+  if (s.charCodeAt(0) === 0xfeff) s = s.slice(1).trim();
+  // Excel "force text" / locale apostrophe before ISO or dates
+  while (s.length && (s.charAt(0) === "'" || s.charAt(0) === "\u2019")) s = s.slice(1).trim();
+  // Optional spreadsheet formula as text: ="2021-06-14..."
+  const eqQuote = s.match(/^="([^"]*)"/);
+  if (eqQuote) s = String(eqQuote[1] || "").trim();
+  else if (/^=\s*"/.test(s)) s = s.replace(/^=\s*"/, "").replace(/"\s*$/, "").trim();
+  if (s.length >= 2 && s.charAt(0) === '"' && s.charAt(s.length - 1) === '"') {
+    s = s.slice(1, -1).replace(/""/g, '"').trim();
+  }
+  return s;
+}
+
+/**
+ * Parse Amazon CSV date cells (Refund Date, etc.) to script-local start-of-day.
+ * Empty or unparseable → null (do not substitute "today").
+ * @param {*} raw
+ * @returns {Date|null}
+ */
+function amzParseAmazonCsvDateLoose_(raw) {
+  if (raw == null) return null;
+  if (raw instanceof Date) {
+    if (isNaN(raw.getTime())) return null;
+    const out = new Date(raw.getFullYear(), raw.getMonth(), raw.getDate());
+    out.setHours(0, 0, 0, 0);
+    return out;
+  }
+  const s = amzNormalizeAmazonCsvDateString_(raw);
+  if (!s) return null;
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) {
+    const y = Number(iso[1]);
+    const mo = Number(iso[2]) - 1;
+    const d = Number(iso[3]);
+    if (y >= 1900 && y <= 2100 && mo >= 0 && mo <= 11 && d >= 1 && d <= 31) {
+      const out = new Date(y, mo, d);
+      out.setHours(0, 0, 0, 0);
+      if (out.getFullYear() === y && out.getMonth() === mo && out.getDate() === d) return out;
+    }
+  }
+  const dt = new Date(s);
+  if (isNaN(dt.getTime())) return null;
+  const out = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
+  out.setHours(0, 0, 0, 0);
+  return out;
+}
+
+/**
+ * Refund Details.csv: calendar date for the transaction row. Prefer Refund Date; if empty or
+ * unparseable (e.g. "Not Applicable"), use Creation Date when present.
+ * @param {Array} r - one CSV row
+ * @param {Object<string, number>} col - trimmed header → column index
+ * @returns {Date|null}
+ */
+function amzResolveRefundDetailsOrderDate_(r, col) {
+  const refundDateCol = "Refund Date";
+  const creationDateCol = "Creation Date";
+  const hasRefundDate = col[refundDateCol] !== undefined;
+  const hasCreationDate = col[creationDateCol] !== undefined;
+  if (hasRefundDate) {
+    const fromRefund = amzParseAmazonCsvDateLoose_(r[col[refundDateCol]]);
+    if (fromRefund) return fromRefund;
+  }
+  if (hasCreationDate) {
+    const fromCreation = amzParseAmazonCsvDateLoose_(r[col[creationDateCol]]);
+    if (fromCreation) return fromCreation;
+  }
+  return null;
+}
+
+/** Max full skipped CSV rows to echo into the import log (status panel). */
+const AMZ_MAX_SKIPPED_CSV_ROW_DUMPS = 20;
+
+/**
+ * Append one skipped-row detail line for the sidebar status log (not filtered as "Server:" lines).
+ * @param {Array<string>} timing
+ * @param {{ n: number }} dumpCounter - incremented when a line is appended
+ * @param {string} pipelineLabel
+ * @param {string} reason
+ * @param {*} rowOrRows - one CSV row (array of cells) or array of rows (grouped lines)
+ */
+function amzLogSkippedCsvDataIfUnderCap_(timing, dumpCounter, pipelineLabel, reason, rowOrRows) {
+  if (!timing || dumpCounter.n >= AMZ_MAX_SKIPPED_CSV_ROW_DUMPS) return;
+  dumpCounter.n += 1;
+  timing.push(
+    "Skipped row detail " +
+      dumpCounter.n +
+      "/" +
+      AMZ_MAX_SKIPPED_CSV_ROW_DUMPS +
+      " [" +
+      pipelineLabel +
+      "]: " +
+      reason +
+      " — " +
+      JSON.stringify(rowOrRows)
+  );
+}
+
+function amzPushSkippedCsvDumpCapNoticeIfNeeded_(timing, dumpCounter) {
+  if (timing && dumpCounter && dumpCounter.n >= AMZ_MAX_SKIPPED_CSV_ROW_DUMPS) {
+    timing.push("Further skipped CSV row details omitted (limit " + AMZ_MAX_SKIPPED_CSV_ROW_DUMPS + ").");
+  }
+}
+
+/**
+ * Start of the user's cutoff calendar day (midnight local) for CSV row comparisons.
+ * Rows with Order/Refund/Return date before this are excluded; on this day are included.
+ * @param {Date|null} userCutoff - from cutoffDateIso (often noon) or months lookback
+ * @returns {Date|null}
+ */
+function amzCutoffStartOfDay_(userCutoff) {
+  if (!userCutoff || isNaN(userCutoff.getTime())) return null;
+  const d = new Date(userCutoff.getFullYear(), userCutoff.getMonth(), userCutoff.getDate());
+  d.setHours(0, 0, 0, 0);
+  return d;
 }
 
 /**
@@ -639,7 +826,7 @@ function analyzePaymentMethodsForOrderHistory(csvText, cutoffDateIso, includePhy
     if (h != null && String(h).trim() !== "") col[String(h).trim()] = i;
   });
   if (amzDetectAmazonCsvFileType(col) !== "standard") {
-    return JSON.stringify({ ok: false, error: "Expected Order History (standard) CSV for payment analysis." });
+    return JSON.stringify({ ok: false, error: "Expected Orders (standard) CSV for payment analysis." });
   }
   const headerErr = amzValidateMappedCsvHeadersPresent(col, config, false);
   if (headerErr) {
@@ -651,6 +838,7 @@ function analyzePaymentMethodsForOrderHistory(csvText, cutoffDateIso, includePhy
     cutoff = new Date(String(cutoffDateIso) + "T12:00:00");
     if (isNaN(cutoff.getTime())) cutoff = null;
   }
+  const cutoffStart = amzCutoffStartOfDay_(cutoff);
 
   const orderDateCol = amzGetCoreCsvColumn(config, "Order Date", false);
   const paymentMethodColName = amzGetCoreCsvColumn(config, "Payment Method Type", false);
@@ -667,7 +855,7 @@ function analyzePaymentMethodsForOrderHistory(csvText, cutoffDateIso, includePhy
     const r = csv[i];
     let orderDate = new Date(r[col[orderDateCol]]);
     orderDate.setHours(0, 0, 0, 0);
-    if (cutoff && orderDate < cutoff) continue;
+    if (cutoffStart && orderDate < cutoffStart) continue;
 
     let isWf = false;
     if (websiteColName && col[websiteColName] !== undefined) {
@@ -831,6 +1019,34 @@ function amzGetTillerColumnMap(sheet) {
     map[k] = i + 1;
   });
   return map;
+}
+
+/**
+ * 1-based column index for a Transactions header; exact match first, then case-insensitive (Tiller header casing varies).
+ * @param {Object} tillerCols - from amzGetTillerColumnMap
+ * @param {string} headerLabel - e.g. config tillerLabels.FULL_DESCRIPTION
+ * @returns {number|null}
+ */
+function amzGetTillerColumnIndex_(tillerCols, headerLabel) {
+  if (!tillerCols || headerLabel == null || String(headerLabel).trim() === "") return null;
+  const exact = tillerCols[headerLabel];
+  if (typeof exact === "number" && !isNaN(exact)) return exact;
+  const want = String(headerLabel).trim().toLowerCase();
+  const keys = Object.keys(tillerCols);
+  for (let i = 0; i < keys.length; i++) {
+    if (String(keys[i]).trim().toLowerCase() === want) return tillerCols[keys[i]];
+  }
+  return null;
+}
+
+/**
+ * Set Description + Full Description on an import row array (0-based indices).
+ */
+function amzSetRowDescriptionFields_(row, tillerCols, tillerLabels, descriptionText, fullDescriptionText) {
+  const dCol = amzGetTillerColumnIndex_(tillerCols, tillerLabels.DESCRIPTION);
+  const fCol = amzGetTillerColumnIndex_(tillerCols, tillerLabels.FULL_DESCRIPTION);
+  if (dCol != null) row[dCol - 1] = descriptionText;
+  if (fCol != null) row[fCol - 1] = fullDescriptionText;
 }
 
 /** Largest 1-based column index referenced by the Tiller label map (for row width vs setValues). */
@@ -1023,6 +1239,126 @@ function amzGetLastTransactionDataRow(sheet, tillerCols, tillerLabels) {
   const dateCol = tillerCols[tillerLabels.DATE];
   if (!dateCol) return 1;
   return amzGetLastRowWithValueInColumn(sheet, dateCol);
+}
+
+/**
+ * Dedup keys from Transactions Metadata only (Full Description may be user-edited).
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {Object} tillerCols
+ * @param {Object} tillerLabels
+ * @param {number} lastDataRow
+ * @param {Set<string>} existingSet
+ */
+function amzAppendDuplicateKeysFromTransactions_(sheet, tillerCols, tillerLabels, lastDataRow, existingSet) {
+  if (lastDataRow < 2) return;
+  const metaCol = tillerCols[tillerLabels.METADATA];
+  if (!metaCol) return;
+  const metas = sheet.getRange(2, metaCol, lastDataRow, 1).getValues();
+  for (let j = 0; j < metas.length; j++) {
+    amzAddDuplicateKeysFromImportMetadataCell_(metas[j][0], existingSet);
+  }
+}
+
+/**
+ * @param {string} s
+ * @returns {string}
+ */
+function amzNormalizeAsinDedupKey_(s) {
+  return String(s || "").trim().toUpperCase();
+}
+
+/**
+ * Add stable dedup key(s) for one parsed {@code parsed.amazon} object (import / legacy shapes).
+ * @param {Object} amz
+ * @param {Set<string>} setObj
+ */
+function amzAddDedupKeysForAmazonMeta_(amz, setObj) {
+  if (!amz || amz.type == null || String(amz.type).trim() === "") return;
+  const t = String(amz.type);
+  if (t === "refund-detail" && amz.orderId != null) {
+    const amt = Number(amz.refundAmount);
+    const amtKey = isNaN(amt) ? String(amz.refundAmount) : amt.toFixed(2);
+    setObj.add("refund-detail|" + String(amz.orderId).trim() + "|" + amtKey);
+    return;
+  }
+  if (t === "digital-return" && amz.id != null) {
+    setObj.add("digital-return|" + String(amz.id).trim() + "|" + String(amz.asin || "").trim());
+    return;
+  }
+  if (t === "purchase-offset" && amz.id != null) {
+    setObj.add("purchase-offset|" + String(amz.id).trim());
+    return;
+  }
+  if (t === "digital-purchase-offset" && amz.id != null) {
+    setObj.add("digital-purchase-offset|" + String(amz.id).trim());
+    return;
+  }
+  if (t === "physical-refund-offset" && amz.id != null) {
+    setObj.add("physical-refund-offset|" + String(amz.id).trim());
+    return;
+  }
+  if (t === "digital-return-offset" && amz.id != null) {
+    setObj.add("digital-return-offset|" + String(amz.id).trim());
+    return;
+  }
+  if (t === "offset" && amz.id != null) {
+    setObj.add("purchase-offset|" + String(amz.id).trim());
+    return;
+  }
+  if (t === "digital-purchase" && amz.id != null) {
+    setObj.add("digital-purchase|" + String(amz.id).trim());
+    return;
+  }
+  if (t === "purchase") {
+    const oid = amz.id != null ? String(amz.id).trim() : "";
+    if (!oid) return;
+    // Digital Content Orders (aggregated per Order ID) always set lineItemCount; legacy physical does not.
+    if (amz.lineItemCount != null && String(amz.lineItemCount).trim() !== "") {
+      setObj.add("digital-purchase|" + oid);
+      return;
+    }
+    const lineAsin = amz.isbn != null && String(amz.isbn).trim() !== "" ? amz.isbn : amz.asin;
+    const asinK = amzNormalizeAsinDedupKey_(lineAsin);
+    setObj.add("physical-purchase-line|" + oid + "|" + asinK);
+  }
+}
+
+/**
+ * @param {*} metaCellValue
+ * @param {Set<string>} setObj
+ */
+function amzAddDuplicateKeysFromImportMetadataCell_(metaCellValue, setObj) {
+  if (metaCellValue == null || metaCellValue === "") return;
+  const s = String(metaCellValue);
+  const brace = s.indexOf("{");
+  if (brace < 0) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(s.substring(brace));
+  } catch (e) {
+    return;
+  }
+  const amz = parsed && parsed.amazon;
+  if (!amz) return;
+  amzAddDedupKeysForAmazonMeta_(amz, setObj);
+}
+
+/**
+ * Sidebar: toast total ZIP import duration (seconds).
+ * @param {number} elapsedSec
+ * @param {boolean} success
+ * @param {string} [errSummary]
+ */
+function amzNotifyImportBundleFinished(elapsedSec, success, errSummary) {
+  const ss = SpreadsheetApp.getActive();
+  const raw = typeof elapsedSec === "number" ? elapsedSec : 0;
+  const rounded = Math.round(raw * 10) / 10;
+  if (success) {
+    ss.toast("Import finished in " + rounded + " s", "Amazon import", 5);
+  } else {
+    const msg = errSummary ? String(errSummary).slice(0, 100) : "Import failed";
+    ss.toast(msg + " (" + rounded + " s)", "Amazon import", 8);
+  }
 }
 
 /**
@@ -1415,7 +1751,11 @@ function amzBuildAmazonMetadataObjectFromRows(
 ) {
   if (!rows || rows.length === 0) return {};
   if (rows.length === 1) {
-    return amzBuildAmazonMetadataObject(rows[0], col, metadataMapping, isDigital, coreMappingStandard, coreMappingDigital);
+    const one = amzBuildAmazonMetadataObject(
+      rows[0], col, metadataMapping, isDigital, coreMappingStandard, coreMappingDigital
+    );
+    one.lineItemCount = 1;
+    return one;
   }
   const numericKeys = ["quantity", "item-price", "unit-price-tax", "shipping-charge", "total-discounts", "total"];
   const obj = {};
@@ -1545,22 +1885,22 @@ function importAmazonRecent(csvText, months, options) {
 
   const fileKind = amzDetectAmazonCsvFileType(col);
   if (!fileKind) {
-    return "Could not detect file type. The CSV must include column \"" + AMZ_DIGITAL_MARKER_HEADER + "\" (Digital Content Orders) or \"" + AMZ_STANDARD_MARKER_HEADER + "\" (Order History).";
+    return "Could not detect file type. The CSV must include column \"" + AMZ_DIGITAL_MARKER_HEADER + "\" (Digital orders) or \"" + AMZ_STANDARD_MARKER_HEADER + "\" (Orders).";
   }
   const isDigital = fileKind === "digital";
   const detectedLabel = isDigital
-    ? "Detected file type: Digital Content Orders"
-    : "Detected file type: Order History (standard)";
+    ? "Detected file type: Digital orders"
+    : "Detected file type: Orders";
 
   if (isDigital) {
     if (config.digitalUserYesCount === 0) {
-      return detectedLabel + "\n" + "Digital Content Orders import requires exactly one row on AMZ Import Table 1 with \"Use for Digital orders?\" set to Yes.";
+      return detectedLabel + "\n" + "Digital orders import requires exactly one row on AMZ Import Table 1 with \"Use for Digital orders?\" set to Yes.";
     }
     if (config.digitalUserYesCount > 1) {
-      return detectedLabel + "\n" + "Digital Content Orders import: multiple rows have \"Use for Digital orders?\" set to Yes. Only one row should be Yes.";
+      return detectedLabel + "\n" + "Digital orders import: multiple rows have \"Use for Digital orders?\" set to Yes. Only one row should be Yes.";
     }
     if (!config.digitalUserAccount) {
-      return detectedLabel + "\n" + "Digital Content Orders import: could not read account fields from the row with Use for Digital orders? = Yes.";
+      return detectedLabel + "\n" + "Digital orders import: could not read account fields from the row with Use for Digital orders? = Yes.";
     }
   }
 
@@ -1576,23 +1916,15 @@ function importAmazonRecent(csvText, months, options) {
     cutoff.setMonth(cutoff.getMonth() - months);
   }
 
+  const cutoffStart = amzCutoffStartOfDay_(cutoff);
+
   const lastDataRow = amzGetLastTransactionDataRow(sheet, tillerCols, tillerLabels);
   const existingFullDescSet = new Set();
   const tDupStart = Date.now();
-  if (lastDataRow >= 2) {
-    const fullDescCol = tillerCols[tillerLabels.FULL_DESCRIPTION];
-    if (fullDescCol) {
-      const numRows = lastDataRow - 1;
-      const fullDescs = sheet.getRange(2, fullDescCol, numRows, 1).getValues();
-      for (let i = 0; i < fullDescs.length; i++) {
-        const val = fullDescs[i][0];
-        if (val) existingFullDescSet.add(String(val));
-      }
-    }
-  }
+  amzAppendDuplicateKeysFromTransactions_(sheet, tillerCols, tillerLabels, lastDataRow, existingFullDescSet);
   const tDupEnd = Date.now();
   timing.push(
-    "Server: read Full Description column + build duplicate set (" +
+    "Server: scan Metadata for dedup keys (" +
     existingFullDescSet.size + " entries): " +
     ((tDupEnd - tDupStart) / 1000).toFixed(2) + " s"
   );
@@ -1608,7 +1940,7 @@ function importAmazonRecent(csvText, months, options) {
     return "AMZ Import Table 2 is missing required core column mappings for this file type.";
   }
   if (!isDigital && (!paymentMethodColName || col[paymentMethodColName] === undefined)) {
-    return "Your CSV must include the payment column mapped for Payment Method Type. Please request a new Order History from Amazon.";
+    return "Your CSV must include the payment column mapped for Payment Method Type. Please request a new Orders export from Amazon.";
   }
 
   const numCols = amzNumColsForImportRows(sheet, tillerCols, tillerLabels, categoryColNum);
@@ -1633,6 +1965,7 @@ function importAmazonRecent(csvText, months, options) {
   /** Per Order ID: { totalAmount (negative sum), orderDate, payKey } for offset rows (one offset per order). */
   const perOrderOffset = {};
   let duplicateCount = 0;
+  const skippedRowDump = { n: 0 };
   let runTimestamp = new Date();
   let importTimestampStr = Utilities.formatDate(runTimestamp, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
   if (opts.bundleImportTimestampIso) {
@@ -1647,11 +1980,8 @@ function importAmazonRecent(csvText, months, options) {
   function pushOneRow(r, rowsForMeta, orderDate, orderID, productName, asin, amount, accountRow, payKey) {
     const month = Utilities.formatDate(orderDate, Session.getScriptTimeZone(), "yyyy-MM");
     const week = amzGetWeekStartDate(orderDate);
-    const descriptionText = (isDigital ? "[AMZD] " : "[AMZ] ") + productName;
-    const expectedFullDesc =
-      "Amazon Order ID " + orderID + ": " +
-      productName + " (" + asin + ")";
-    const fullDesc = expectedFullDesc;
+    const descShort = amzFormatPurchaseDescription_(isDigital, productName);
+    const descFull = amzFormatPurchaseFullDescription_(isDigital, orderID, productName, asin);
 
     const amazonMeta = rowsForMeta && rowsForMeta.length > 1
       ? amzBuildAmazonMetadataObjectFromRows(
@@ -1671,12 +2001,19 @@ function importAmazonRecent(csvText, months, options) {
           config.coreMappingStandard,
           config.coreMappingDigital
         );
+    if (isDigital) {
+      amazonMeta.type = "digital-purchase";
+      amazonMeta.id = String(orderID == null ? "" : orderID).trim();
+    } else {
+      if (!amazonMeta.type) amazonMeta.type = "purchase";
+      amazonMeta.id = String(orderID == null ? "" : orderID).trim();
+      amazonMeta.asin = String(asin == null ? "" : asin).trim();
+    }
     const metadataValue = "Imported by AmazonCSVImporter on " + importTimestampStr + " " + JSON.stringify({ amazon: amazonMeta });
 
     const rowOut = new Array(numCols).fill("");
     rowOut[tillerCols[tillerLabels.DATE] - 1] = orderDate;
-    rowOut[tillerCols[tillerLabels.DESCRIPTION] - 1] = descriptionText;
-    rowOut[tillerCols[tillerLabels.FULL_DESCRIPTION] - 1] = fullDesc;
+    amzSetRowDescriptionFields_(rowOut, tillerCols, tillerLabels, descShort, descFull);
     rowOut[tillerCols[tillerLabels.AMOUNT] - 1] = amount;
     rowOut[tillerCols[tillerLabels.TRANSACTION_ID] - 1] = amzGenerateGuid();
     rowOut[tillerCols[tillerLabels.DATE_ADDED] - 1] = runTimestamp;
@@ -1695,7 +2032,16 @@ function importAmazonRecent(csvText, months, options) {
     for (let i = 1; i < csv.length; i++) {
       const r = csv[i];
       const oid = String(r[col[orderIdCol]] == null ? "" : r[col[orderIdCol]]).trim();
-      if (!oid) continue;
+      if (!oid) {
+        amzLogSkippedCsvDataIfUnderCap_(
+          timing,
+          skippedRowDump,
+          "Digital orders",
+          "missing Order ID",
+          r
+        );
+        continue;
+      }
       if (!groups[oid]) groups[oid] = [];
       groups[oid].push(r);
     }
@@ -1711,19 +2057,26 @@ function importAmazonRecent(csvText, months, options) {
       }
       const amount = sumAmount * -1;
 
-      let orderDate = new Date(r[col[orderDateCol]]);
-      orderDate.setHours(0, 0, 0, 0);
-      if (cutoff && orderDate < cutoff) continue;
+      const orderDateParsed = amzParseAmazonCsvDateLoose_(r[col[orderDateCol]]);
+      if (!orderDateParsed) {
+        amzLogSkippedCsvDataIfUnderCap_(
+          timing,
+          skippedRowDump,
+          "Digital orders",
+          "Order Date empty or not parseable",
+          rows
+        );
+        continue;
+      }
+      const orderDate = orderDateParsed;
+      if (cutoffStart && orderDate < cutoffStart) continue;
 
       const orderID = r[col[orderIdCol]];
       const productName = r[col[productNameCol]];
       const asin = r[col[asinCol]];
 
-      const expectedFullDesc =
-        "Amazon Order ID " + orderID + ": " +
-        productName + " (" + asin + ")";
-
-      if (existingFullDescSet.has(expectedFullDesc)) {
+      const dupKeyPurchase = "digital-purchase|" + String(orderID == null ? "" : orderID).trim();
+      if (existingFullDescSet.has(dupKeyPurchase)) {
         duplicateCount += 1;
         continue;
       }
@@ -1741,14 +2094,25 @@ function importAmazonRecent(csvText, months, options) {
       perOrderOffset[oidKey].totalAmount += amount;
 
       pushOneRow(r, rows, orderDate, orderID, productName, asin, amount, accountRow, payKey);
+      existingFullDescSet.add(dupKeyPurchase);
     }
   } else {
     const websiteColName = amzGetCoreCsvColumn(config, "Website", false);
     for (let i = 1; i < csv.length; i++) {
       const r = csv[i];
-      let orderDate = new Date(r[col[orderDateCol]]);
-      orderDate.setHours(0, 0, 0, 0);
-      if (cutoff && orderDate < cutoff) continue;
+      const orderDateParsed = amzParseAmazonCsvDateLoose_(r[col[orderDateCol]]);
+      if (!orderDateParsed) {
+        amzLogSkippedCsvDataIfUnderCap_(
+          timing,
+          skippedRowDump,
+          "Orders",
+          "Order Date empty or not parseable",
+          r
+        );
+        continue;
+      }
+      const orderDate = orderDateParsed;
+      if (cutoffStart && orderDate < cutoffStart) continue;
 
       if (websiteColName && col[websiteColName] !== undefined) {
         const wf = String(r[col[websiteColName]] || "").trim().toLowerCase();
@@ -1760,12 +2124,16 @@ function importAmazonRecent(csvText, months, options) {
       const orderID = r[col[orderIdCol]];
       const productName = r[col[productNameCol]];
       const asin = r[col[asinCol]];
+      const oidTrim = String(orderID == null ? "" : orderID).trim();
+      if (!oidTrim) {
+        amzLogSkippedCsvDataIfUnderCap_(timing, skippedRowDump, "Orders", "missing Order ID", r);
+        continue;
+      }
 
-      const expectedFullDesc =
-        "Amazon Order ID " + orderID + ": " +
-        productName + " (" + asin + ")";
+      const dupKeyPurchase =
+        "physical-purchase-line|" + oidTrim + "|" + amzNormalizeAsinDedupKey_(asin);
 
-      if (existingFullDescSet.has(expectedFullDesc)) {
+      if (existingFullDescSet.has(dupKeyPurchase)) {
         duplicateCount += 1;
         continue;
       }
@@ -1778,7 +2146,7 @@ function importAmazonRecent(csvText, months, options) {
 
       const amount = parseFloat(r[col[totalAmountCol]]) * -1;
       const payKey = paymentMethodType;
-      const oidKey = String(orderID == null ? "" : orderID).trim();
+      const oidKey = oidTrim;
       if (!perOrderOffset[oidKey]) {
         perOrderOffset[oidKey] = {
           totalAmount: 0,
@@ -1791,6 +2159,7 @@ function importAmazonRecent(csvText, months, options) {
       perOrderOffset[oidKey].totalAmount += amount;
 
       pushOneRow(r, null, orderDate, orderID, productName, asin, amount, accountRow, payKey);
+      existingFullDescSet.add(dupKeyPurchase);
     }
   }
 
@@ -1807,13 +2176,13 @@ function importAmazonRecent(csvText, months, options) {
     if (duplicateCount > 0) {
       msg += "\n" + duplicateCount + " duplicate transactions were found and were not imported.";
     }
-    return detectedLabel + "\n" + msg;
+    amzPushSkippedCsvDumpCapNoticeIfNeeded_(timing, skippedRowDump);
+    return detectedLabel + "\n" + msg + (timing.length ? "\n" + timing.join("\n") : "");
   }
 
   // One balancing offset per Order ID; Date/Month/Week = that order's date. Date Added = import run time.
   const offsetRows = [];
   const offsetNow = runTimestamp;
-  const offsetTimestampStr = Utilities.formatDate(offsetNow, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
 
   const orderIdsForOffset = Object.keys(perOrderOffset);
   let offsetSkippedZeroNet = 0;
@@ -1839,16 +2208,10 @@ function importAmazonRecent(csvText, months, options) {
     const offMonth = Utilities.formatDate(orderDateForOffset, Session.getScriptTimeZone(), "yyyy-MM");
     const offWeek = amzGetWeekStartDate(orderDateForOffset);
 
-    const descShort = isDigital
-      ? "Amazon digital purchase offset; Order " + oidKey
-      : "Amazon purchase offset; Order " + oidKey;
-    const descFull = isDigital
-      ? "Amazon digital purchase offset; Order " + oidKey + " (" + offsetTimestampStr + ")"
-      : "Amazon purchase offset; Order " + oidKey + " (" + po.payKey + ") " + offsetTimestampStr;
+    const offDesc = amzFormatPurchaseOffsetLine_(isDigital, oidKey);
     const offset = new Array(numCols).fill("");
     offset[tillerCols[tillerLabels.DATE] - 1] = orderDateForOffset;
-    offset[tillerCols[tillerLabels.DESCRIPTION] - 1] = descShort;
-    offset[tillerCols[tillerLabels.FULL_DESCRIPTION] - 1] = descFull;
+    amzSetRowDescriptionFields_(offset, tillerCols, tillerLabels, offDesc, offDesc);
     offset[tillerCols[tillerLabels.AMOUNT] - 1] = Math.abs(total);
     offset[tillerCols[tillerLabels.TRANSACTION_ID] - 1] = amzGenerateGuid();
     offset[tillerCols[tillerLabels.DATE_ADDED] - 1] = offsetNow;
@@ -1928,6 +2291,7 @@ function importAmazonRecent(csvText, months, options) {
       offsetSkippedNoAccount +
       " order(s) had no matching payment account for the offset — no offset row (add the payment type on AMZ Import).";
   }
+  amzPushSkippedCsvDumpCapNoticeIfNeeded_(timing, skippedRowDump);
   timing.unshift(summary);
   timing.unshift(detectedLabel);
 
@@ -1981,7 +2345,7 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
 
   const csv = Utilities.parseCsv(csvText);
   if (!csv.length || !csv[0].length) {
-    return "Error: Digital Returns CSV is empty.";
+    return "Error: Digital returns CSV is empty.";
   }
   const headers = csv[0];
   const col = {};
@@ -1992,7 +2356,7 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
   const need = ["ASIN", "Order ID", "Return Date", "Transaction Amount"];
   for (let n = 0; n < need.length; n++) {
     if (col[need[n]] === undefined) {
-      return "Digital Returns CSV must include columns: ASIN, Order ID, Return Date, Transaction Amount.";
+      return "Digital returns CSV must include columns: ASIN, Order ID, Return Date, Transaction Amount.";
     }
   }
 
@@ -2001,6 +2365,7 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
     cutoff = new Date(String(opts.cutoffDateIso) + "T12:00:00");
     if (isNaN(cutoff.getTime())) cutoff = null;
   }
+  const cutoffStart = amzCutoffStartOfDay_(cutoff);
 
   const orderIdCol = "Order ID";
   const returnDateCol = "Return Date";
@@ -2009,23 +2374,19 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
 
   const lastDataRow = amzGetLastTransactionDataRow(sheet, tillerCols, tillerLabels);
   const existingFullDescSet = new Set();
-  if (lastDataRow >= 2) {
-    const fullDescCol = tillerCols[tillerLabels.FULL_DESCRIPTION];
-    if (fullDescCol) {
-      const numRows = lastDataRow - 1;
-      const fullDescs = sheet.getRange(2, fullDescCol, numRows, 1).getValues();
-      for (let i = 0; i < fullDescs.length; i++) {
-        const val = fullDescs[i][0];
-        if (val) existingFullDescSet.add(String(val));
-      }
-    }
-  }
+  amzAppendDuplicateKeysFromTransactions_(sheet, tillerCols, tillerLabels, lastDataRow, existingFullDescSet);
 
   const groups = {};
+  const skipRowDump = { n: 0 };
+  let skippedMissingDigitalReturnOrderId = 0;
   for (let i = 1; i < csv.length; i++) {
     const r = csv[i];
     const oid = String(r[col[orderIdCol]] == null ? "" : r[col[orderIdCol]]).trim();
-    if (!oid) continue;
+    if (!oid) {
+      skippedMissingDigitalReturnOrderId += 1;
+      amzLogSkippedCsvDataIfUnderCap_(timing, skipRowDump, "Digital returns", "missing Order ID", r);
+      continue;
+    }
     if (!groups[oid]) groups[oid] = [];
     groups[oid].push(r);
   }
@@ -2070,15 +2431,35 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
     }
     const amount = sumAmount * -1;
 
-    let orderDate = new Date(r[col[returnDateCol]]);
-    orderDate.setHours(0, 0, 0, 0);
-    if (cutoff && orderDate < cutoff) continue;
+    const orderDate = amzParseAmazonCsvDateLoose_(r[col[returnDateCol]]);
+    if (!orderDate) {
+      amzLogSkippedCsvDataIfUnderCap_(
+        timing,
+        skipRowDump,
+        "Digital returns",
+        "Return Date empty or not parseable",
+        rows
+      );
+      continue;
+    }
+    if (cutoffStart && orderDate < cutoffStart) continue;
+    if (sumAmount === 0) {
+      amzLogSkippedCsvDataIfUnderCap_(
+        timing,
+        skipRowDump,
+        "Digital returns",
+        "Transaction Amount summed to $0",
+        rows
+      );
+      continue;
+    }
 
     const orderID = r[col[orderIdCol]];
     const asin = r[col[asinCol]];
 
-    const expectedFullDesc = "Amazon Digital Return Order " + orderID + ": " + String(asin || "").trim();
-    if (existingFullDescSet.has(expectedFullDesc)) {
+    const dupKeyDigitalReturn =
+      "digital-return|" + String(orderID == null ? "" : orderID).trim() + "|" + String(asin || "").trim();
+    if (existingFullDescSet.has(dupKeyDigitalReturn)) {
       duplicateCount += 1;
       continue;
     }
@@ -2091,11 +2472,9 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
 
     const month = Utilities.formatDate(orderDate, Session.getScriptTimeZone(), "yyyy-MM");
     const week = amzGetWeekStartDate(orderDate);
-    const descriptionText = "[AMZD] Digital return " + String(asin || "").trim();
     const rowOut = new Array(numCols).fill("");
     rowOut[tillerCols[tillerLabels.DATE] - 1] = orderDate;
-    rowOut[tillerCols[tillerLabels.DESCRIPTION] - 1] = descriptionText;
-    rowOut[tillerCols[tillerLabels.FULL_DESCRIPTION] - 1] = expectedFullDesc;
+    amzSetRowDescriptionFields_(rowOut, tillerCols, tillerLabels, AMZ_DESC_DIGITAL_REFUND, AMZ_DESC_DIGITAL_REFUND);
     rowOut[tillerCols[tillerLabels.AMOUNT] - 1] = amount;
     rowOut[tillerCols[tillerLabels.TRANSACTION_ID] - 1] = amzGenerateGuid();
     rowOut[tillerCols[tillerLabels.DATE_ADDED] - 1] = runTimestamp;
@@ -2107,6 +2486,7 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
     rowOut[tillerCols[tillerLabels.ACCOUNT_ID] - 1] = accountRow.ACCOUNT_ID;
     rowOut[tillerCols[tillerLabels.METADATA] - 1] = metadataValue;
     output.push(rowOut);
+    existingFullDescSet.add(dupKeyDigitalReturn);
 
     const oidKey = String(orderID == null ? "" : orderID).trim();
     if (!perOrderOffset[oidKey]) {
@@ -2120,14 +2500,19 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
   }
 
   if (!output.length) {
-    let msg = "Digital Returns: no new transactions";
+    let msg = "Digital returns: no new transactions";
     if (duplicateCount > 0) msg += "\n" + duplicateCount + " duplicates skipped.";
-    return msg;
+    if (skippedMissingDigitalReturnOrderId > 0) {
+      msg +=
+        "\n" + skippedMissingDigitalReturnOrderId + " data row(s) skipped: missing Order ID.";
+    }
+    amzPushSkippedCsvDumpCapNoticeIfNeeded_(timing, skipRowDump);
+    timing.unshift(msg);
+    return timing.join("\n");
   }
 
   const offsetRows = [];
   const offsetNow = runTimestamp;
-  const offsetTimestampStr = Utilities.formatDate(offsetNow, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
   const orderIdsForOffset = Object.keys(perOrderOffset);
   for (let oi = 0; oi < orderIdsForOffset.length; oi++) {
     const oidKey = orderIdsForOffset[oi];
@@ -2138,12 +2523,10 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
     orderDateForOffset.setHours(0, 0, 0, 0);
     const offMonth = Utilities.formatDate(orderDateForOffset, Session.getScriptTimeZone(), "yyyy-MM");
     const offWeek = amzGetWeekStartDate(orderDateForOffset);
-    const descShort = "Amazon digital return offset; Order " + oidKey;
-    const descFull = "Amazon digital return offset; Order " + oidKey + " (" + offsetTimestampStr + ")";
     const offset = new Array(numCols).fill("");
     offset[tillerCols[tillerLabels.DATE] - 1] = orderDateForOffset;
-    offset[tillerCols[tillerLabels.DESCRIPTION] - 1] = descShort;
-    offset[tillerCols[tillerLabels.FULL_DESCRIPTION] - 1] = descFull;
+    const digRetOffDesc = amzFormatDigitalReturnOffsetLine_(oidKey);
+    amzSetRowDescriptionFields_(offset, tillerCols, tillerLabels, digRetOffDesc, digRetOffDesc);
     offset[tillerCols[tillerLabels.AMOUNT] - 1] = Math.abs(total);
     offset[tillerCols[tillerLabels.TRANSACTION_ID] - 1] = amzGenerateGuid();
     offset[tillerCols[tillerLabels.DATE_ADDED] - 1] = offsetNow;
@@ -2154,7 +2537,9 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
     offset[tillerCols[tillerLabels.ACCOUNT_NUMBER] - 1] = offsetAcct.ACCOUNT_NUMBER;
     offset[tillerCols[tillerLabels.INSTITUTION] - 1] = offsetAcct.INSTITUTION;
     offset[tillerCols[tillerLabels.ACCOUNT_ID] - 1] = offsetAcct.ACCOUNT_ID;
-    offset[tillerCols[tillerLabels.METADATA] - 1] = "Imported by AmazonCSVImporter on " + importTimestampStr;
+    const digRetOffMeta = { id: String(oidKey), type: "digital-return-offset" };
+    offset[tillerCols[tillerLabels.METADATA] - 1] =
+      "Imported by AmazonCSVImporter on " + importTimestampStr + " " + JSON.stringify({ amazon: digRetOffMeta });
     if (offsetCategory && categoryColNum) {
       offset[categoryColNum - 1] = offsetCategory;
     }
@@ -2187,8 +2572,13 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
     for (let pi = 0; pi < postLines.length; pi++) timing.push(postLines[pi]);
   }
 
-  let summary = "Digital Returns: " + output.length + " transactions imported";
+  let summary = "Digital returns: " + output.length + " transactions imported";
   if (duplicateCount > 0) summary += "\n" + duplicateCount + " duplicates skipped.";
+  if (skippedMissingDigitalReturnOrderId > 0) {
+    summary +=
+      "\n" + skippedMissingDigitalReturnOrderId + " data row(s) skipped: missing Order ID.";
+  }
+  amzPushSkippedCsvDumpCapNoticeIfNeeded_(timing, skipRowDump);
   timing.push(
     "Server: TOTAL importDigitalReturnsCsv: " + ((Date.now() - t0) / 1000).toFixed(2) + " s"
   );
@@ -2197,7 +2587,8 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
 }
 
 /**
- * Refund Details.csv (Order History refunds): Order ID, Refund Amount, Refund Date, Website.
+ * Refund Details.csv (Order History refunds): Order ID, Refund Amount, Website;
+ * Refund Date and/or Creation Date (date from Refund Date when parseable, else Creation Date).
  * Website is stored in metadata / full description only — not filtered by Orders vs Whole Foods toggles.
  * When Order History.csv is available in the same bundle, join by Order ID to resolve payment method; else account fields are left blank for manual fix.
  * @param {string} orderHistoryCsv - Optional raw Order History CSV from ZIP (for payment join)
@@ -2250,7 +2641,7 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
 
   const csv = Utilities.parseCsv(csvText);
   if (!csv.length || !csv[0].length) {
-    return "Error: Refund Details CSV is empty.";
+    return "Error: Orders returns CSV is empty.";
   }
   const headers = csv[0];
   const col = {};
@@ -2258,11 +2649,16 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     if (h != null && String(h).trim() !== "") col[String(h).trim()] = i;
   });
 
-  const need = ["Order ID", "Refund Amount", "Refund Date", "Website"];
+  const need = ["Order ID", "Refund Amount", "Website"];
   for (let n = 0; n < need.length; n++) {
     if (col[need[n]] === undefined) {
-      return "Refund Details CSV must include columns: Order ID, Refund Amount, Refund Date, Website.";
+      return "Orders returns CSV must include columns: Order ID, Refund Amount, Website.";
     }
+  }
+  if (col["Refund Date"] === undefined && col["Creation Date"] === undefined) {
+    return (
+      "Orders returns CSV must include at least one date column: Refund Date or Creation Date."
+    );
   }
 
   let cutoff = null;
@@ -2270,6 +2666,7 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     cutoff = new Date(String(opts.cutoffDateIso) + "T12:00:00");
     if (isNaN(cutoff.getTime())) cutoff = null;
   }
+  const cutoffStart = amzCutoffStartOfDay_(cutoff);
 
   const orderIdCol = "Order ID";
   const refundAmountCol = "Refund Amount";
@@ -2278,23 +2675,19 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
 
   const lastDataRow = amzGetLastTransactionDataRow(sheet, tillerCols, tillerLabels);
   const existingFullDescSet = new Set();
-  if (lastDataRow >= 2) {
-    const fullDescCol = tillerCols[tillerLabels.FULL_DESCRIPTION];
-    if (fullDescCol) {
-      const numRows = lastDataRow - 1;
-      const fullDescs = sheet.getRange(2, fullDescCol, numRows, 1).getValues();
-      for (let i = 0; i < fullDescs.length; i++) {
-        const val = fullDescs[i][0];
-        if (val) existingFullDescSet.add(String(val));
-      }
-    }
-  }
+  amzAppendDuplicateKeysFromTransactions_(sheet, tillerCols, tillerLabels, lastDataRow, existingFullDescSet);
 
   const groups = {};
+  const skipRowDump = { n: 0 };
+  let skippedMissingRefundOrderId = 0;
   for (let i = 1; i < csv.length; i++) {
     const r = csv[i];
     const oid = String(r[col[orderIdCol]] == null ? "" : r[col[orderIdCol]]).trim();
-    if (!oid) continue;
+    if (!oid) {
+      skippedMissingRefundOrderId += 1;
+      amzLogSkippedCsvDataIfUnderCap_(timing, skipRowDump, "Orders returns", "missing Order ID", r);
+      continue;
+    }
 
     // Do not apply Order History Website (Amazon.com vs Whole Foods) filters here — they are tied to
     // the "Orders" checkbox and would drop all Amazon.com refunds when only Orders Returns is selected.
@@ -2307,18 +2700,30 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
   const colDebug = amzTransactionsColumnDebugLines(sheet, tillerCols, tillerLabels, numCols, categoryColNum);
   for (let di = 0; di < colDebug.length; di++) timing.push(colDebug[di]);
 
-  if (csv.length > 1 && col[refundDateCol] !== undefined) {
-    const rawFd = csv[1][col[refundDateCol]];
-    const sd = new Date(rawFd);
-    sd.setHours(0, 0, 0, 0);
-    timing.push(
-      "Server: sample CSV row 1 Refund Date — raw=" +
-        JSON.stringify(rawFd) +
-        " getTime=" +
-        sd.getTime() +
-        " valid=" +
-        !isNaN(sd.getTime())
-    );
+  if (csv.length > 1) {
+    if (col[refundDateCol] !== undefined) {
+      const rawFd = csv[1][col[refundDateCol]];
+      const sd = new Date(rawFd);
+      sd.setHours(0, 0, 0, 0);
+      timing.push(
+        "Server: sample CSV row 1 Refund Date — raw=" +
+          JSON.stringify(rawFd) +
+          " getTime=" +
+          sd.getTime() +
+          " valid=" +
+          !isNaN(sd.getTime())
+      );
+    }
+    if (col["Creation Date"] !== undefined) {
+      const rawCd = csv[1][col["Creation Date"]];
+      const resolved = amzResolveRefundDetailsOrderDate_(csv[1], col);
+      timing.push(
+        "Server: sample CSV row 1 Creation Date — raw=" +
+          JSON.stringify(rawCd) +
+          " resolvedOrderDate=" +
+          (resolved ? resolved.getTime() : "null")
+      );
+    }
   }
 
   const output = [];
@@ -2330,6 +2735,7 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     runTimestamp = amzParseImportTimestampToDate(importTimestampStr);
   }
   let duplicateCount = 0;
+  let skippedInvalidRefundDate = 0;
 
   const orderIds = Object.keys(groups);
   for (let g = 0; g < orderIds.length; g++) {
@@ -2342,10 +2748,22 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     }
     const amount = sumRefund;
 
-    let orderDate = new Date(r[col[refundDateCol]]);
-    if (isNaN(orderDate.getTime())) orderDate = new Date();
-    orderDate.setHours(0, 0, 0, 0);
-    if (cutoff && orderDate < cutoff) continue;
+    const orderDate = amzResolveRefundDetailsOrderDate_(r, col);
+    if (!orderDate) {
+      skippedInvalidRefundDate += 1;
+      amzLogSkippedCsvDataIfUnderCap_(
+        timing,
+        skipRowDump,
+        "Orders returns",
+        "Could not parse a transaction date from Refund Date or Creation Date",
+        rows
+      );
+      continue;
+    }
+    if (cutoffStart && orderDate < cutoffStart) continue;
+    if (sumRefund === 0) {
+      continue;
+    }
 
     const orderID = r[col[orderIdCol]];
     const websiteVal = String(r[col[websiteCol]] || "").trim();
@@ -2354,9 +2772,9 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     const paymentHint = oidStr && paymentByOrder[oidStr] != null ? String(paymentByOrder[oidStr]).trim() : "";
     const accountRow = amzResolvePhysicalRefundAccountRow(paymentHint, paymentAccounts);
 
-    const expectedFullDesc =
-      "Amazon Physical Refund Order " + orderID + ": " + sumRefund.toFixed(2) + " " + websiteVal;
-    if (existingFullDescSet.has(expectedFullDesc)) {
+    const dupKeyRefund =
+      "refund-detail|" + oidStr + "|" + Number(sumRefund).toFixed(2);
+    if (existingFullDescSet.has(dupKeyRefund)) {
       duplicateCount += 1;
       continue;
     }
@@ -2364,7 +2782,9 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     const amazonMeta = {
       orderId: String(orderID),
       refundAmount: sumRefund,
-      refundDate: String(r[col[refundDateCol]] != null ? r[col[refundDateCol]] : ""),
+      refundDate: String(
+        col[refundDateCol] !== undefined && r[col[refundDateCol]] != null ? r[col[refundDateCol]] : ""
+      ),
       website: websiteVal,
       type: "refund-detail"
     };
@@ -2373,11 +2793,15 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
 
     const month = Utilities.formatDate(orderDate, Session.getScriptTimeZone(), "yyyy-MM");
     const week = amzGetWeekStartDate(orderDate);
-    const descriptionText = "[AMZ] Refund Order " + String(orderID);
     const rowOut = new Array(numCols).fill("");
     rowOut[tillerCols[tillerLabels.DATE] - 1] = orderDate;
-    rowOut[tillerCols[tillerLabels.DESCRIPTION] - 1] = descriptionText;
-    rowOut[tillerCols[tillerLabels.FULL_DESCRIPTION] - 1] = expectedFullDesc;
+    amzSetRowDescriptionFields_(
+      rowOut,
+      tillerCols,
+      tillerLabels,
+      amzFormatPhysicalRefundDescription_(),
+      amzFormatPhysicalRefundFullDescription_(orderID)
+    );
     rowOut[tillerCols[tillerLabels.AMOUNT] - 1] = amount;
     rowOut[tillerCols[tillerLabels.TRANSACTION_ID] - 1] = amzGenerateGuid();
     rowOut[tillerCols[tillerLabels.DATE_ADDED] - 1] = runTimestamp;
@@ -2389,6 +2813,7 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     rowOut[tillerCols[tillerLabels.ACCOUNT_ID] - 1] = accountRow.ACCOUNT_ID;
     rowOut[tillerCols[tillerLabels.METADATA] - 1] = metadataValue;
     output.push(rowOut);
+    existingFullDescSet.add(dupKeyRefund);
 
     const oidKey = oidStr;
     if (!perOrderOffset[oidKey]) {
@@ -2402,14 +2827,25 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
   }
 
   if (!output.length) {
-    let msg = "Refund Details: no new transactions";
+    let msg = "Orders returns: no new transactions";
     if (duplicateCount > 0) msg += "\n" + duplicateCount + " duplicates skipped.";
-    return msg;
+    if (skippedMissingRefundOrderId > 0) {
+      msg +=
+        "\n" + skippedMissingRefundOrderId + " data row(s) skipped: missing Order ID.";
+    }
+    if (skippedInvalidRefundDate > 0) {
+      msg +=
+        "\n" +
+        skippedInvalidRefundDate +
+        " row(s) skipped: could not parse Refund Date or Creation Date (rows are not dated to today).";
+    }
+    amzPushSkippedCsvDumpCapNoticeIfNeeded_(timing, skipRowDump);
+    timing.unshift(msg);
+    return timing.join("\n");
   }
 
   const offsetRows = [];
   const offsetNow = runTimestamp;
-  const offsetTimestampStr = Utilities.formatDate(offsetNow, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
   const orderIdsForOffset = Object.keys(perOrderOffset);
   for (let oi = 0; oi < orderIdsForOffset.length; oi++) {
     const oidKey = orderIdsForOffset[oi];
@@ -2420,12 +2856,10 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     orderDateForOffset.setHours(0, 0, 0, 0);
     const offMonth = Utilities.formatDate(orderDateForOffset, Session.getScriptTimeZone(), "yyyy-MM");
     const offWeek = amzGetWeekStartDate(orderDateForOffset);
-    const descShort = "Amazon refund offset; Order " + oidKey;
-    const descFull = "Amazon refund offset; Order " + oidKey + " (" + offsetTimestampStr + ")";
     const offset = new Array(numCols).fill("");
     offset[tillerCols[tillerLabels.DATE] - 1] = orderDateForOffset;
-    offset[tillerCols[tillerLabels.DESCRIPTION] - 1] = descShort;
-    offset[tillerCols[tillerLabels.FULL_DESCRIPTION] - 1] = descFull;
+    const physRefOffDesc = amzFormatPhysicalRefundOffsetLine_(oidKey);
+    amzSetRowDescriptionFields_(offset, tillerCols, tillerLabels, physRefOffDesc, physRefOffDesc);
     offset[tillerCols[tillerLabels.AMOUNT] - 1] = -Math.abs(total);
     offset[tillerCols[tillerLabels.TRANSACTION_ID] - 1] = amzGenerateGuid();
     offset[tillerCols[tillerLabels.DATE_ADDED] - 1] = offsetNow;
@@ -2437,7 +2871,9 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     offset[tillerCols[tillerLabels.ACCOUNT_NUMBER] - 1] = acct.ACCOUNT_NUMBER;
     offset[tillerCols[tillerLabels.INSTITUTION] - 1] = acct.INSTITUTION;
     offset[tillerCols[tillerLabels.ACCOUNT_ID] - 1] = acct.ACCOUNT_ID;
-    offset[tillerCols[tillerLabels.METADATA] - 1] = "Imported by AmazonCSVImporter on " + importTimestampStr;
+    const physRefOffMeta = { id: String(oidKey), type: "physical-refund-offset" };
+    offset[tillerCols[tillerLabels.METADATA] - 1] =
+      "Imported by AmazonCSVImporter on " + importTimestampStr + " " + JSON.stringify({ amazon: physRefOffMeta });
     if (offsetCategory && categoryColNum) {
       offset[categoryColNum - 1] = offsetCategory;
     }
@@ -2470,8 +2906,19 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     for (let pi = 0; pi < postLines.length; pi++) timing.push(postLines[pi]);
   }
 
-  let summary = "Refund Details: " + output.length + " transactions imported";
+  let summary = "Orders returns: " + output.length + " transactions imported";
   if (duplicateCount > 0) summary += "\n" + duplicateCount + " duplicates skipped.";
+  if (skippedMissingRefundOrderId > 0) {
+    summary +=
+      "\n" + skippedMissingRefundOrderId + " data row(s) skipped: missing Order ID.";
+  }
+  if (skippedInvalidRefundDate > 0) {
+    summary +=
+      "\n" +
+      skippedInvalidRefundDate +
+      " row(s) skipped: could not parse Refund Date or Creation Date (rows are not dated to today).";
+  }
+  amzPushSkippedCsvDumpCapNoticeIfNeeded_(timing, skipRowDump);
   timing.push(
     "Server: TOTAL importRefundDetailsCsv: " + ((Date.now() - t0) / 1000).toFixed(2) + " s"
   );
@@ -2568,42 +3015,42 @@ function importAmazonBundleChunk(payloadJson) {
   if (step === "orderHistory") {
     if (runOH && payload.orderHistoryCsv) {
       didImport = true;
-      logText = "=== Order History ===\n" + importAmazonRecent(payload.orderHistoryCsv, null, optsStr);
+      logText = "=== Orders ===\n" + importAmazonRecent(payload.orderHistoryCsv, null, optsStr);
     } else if (runOH) {
-      logText = "=== Order History ===\n" + "(skipped: Order History.csv not found in ZIP)";
+      logText = "=== Orders ===\n" + "(skipped: Order History.csv not found in ZIP)";
     } else {
-      logText = "=== Order History ===\n" + "(skipped: not selected)";
+      logText = "=== Orders ===\n" + "(skipped: not selected)";
     }
   } else if (step === "digitalOrders") {
     if (payload.includeDigitalOrders && payload.digitalOrdersCsv) {
       didImport = true;
-      logText = "=== Digital Content Orders ===\n" + importAmazonRecent(payload.digitalOrdersCsv, null, optsStr);
+      logText = "=== Digital orders ===\n" + importAmazonRecent(payload.digitalOrdersCsv, null, optsStr);
     } else if (payload.includeDigitalOrders) {
-      logText = "=== Digital Content Orders ===\n" + "(skipped: file not in ZIP)";
+      logText = "=== Digital orders ===\n" + "(skipped: file not in ZIP)";
     } else {
-      logText = "=== Digital Content Orders ===\n" + "(skipped: not selected)";
+      logText = "=== Digital orders ===\n" + "(skipped: not selected)";
     }
   } else if (step === "digitalReturns") {
     if (payload.includeDigitalReturns && payload.digitalReturnsCsv) {
       didImport = true;
       logText =
-        "=== Digital Returns ===\n" +
+        "=== Digital returns ===\n" +
         importDigitalReturnsCsv(payload.digitalReturnsCsv, optsStr, payload.digitalOrdersCsv || null);
     } else if (payload.includeDigitalReturns) {
-      logText = "=== Digital Returns ===\n" + "(skipped: file not in ZIP)";
+      logText = "=== Digital returns ===\n" + "(skipped: file not in ZIP)";
     } else {
-      logText = "=== Digital Returns ===\n" + "(skipped: not selected)";
+      logText = "=== Digital returns ===\n" + "(skipped: not selected)";
     }
   } else if (step === "refundDetails") {
     if (payload.includeRefundDetails && payload.refundDetailsCsv) {
       didImport = true;
       logText =
-        "=== Refund Details ===\n" +
+        "=== Orders returns ===\n" +
         importRefundDetailsCsv(payload.refundDetailsCsv, optsStr, payload.orderHistoryCsv || null);
     } else if (payload.includeRefundDetails) {
-      logText = "=== Refund Details ===\n" + "(skipped: file not in ZIP)";
+      logText = "=== Orders returns ===\n" + "(skipped: file not in ZIP)";
     } else {
-      logText = "=== Refund Details ===\n" + "(skipped: not selected)";
+      logText = "=== Orders returns ===\n" + "(skipped: not selected)";
     }
   } else {
     throw new Error("Unknown import chunk step: " + step);
@@ -2642,31 +3089,31 @@ function importAmazonBundle(bundleJson) {
   const runOH = bundle.includePhysicalOrders || bundle.includeWholeFoods;
   if (runOH && bundle.orderHistoryCsv) {
     importRuns += 1;
-    sections.push("=== Order History ===\n" + importAmazonRecent(bundle.orderHistoryCsv, null, optsStr));
+    sections.push("=== Orders ===\n" + importAmazonRecent(bundle.orderHistoryCsv, null, optsStr));
   } else if (runOH) {
-    sections.push("=== Order History ===\n" + "(skipped: Order History.csv not found in ZIP)");
+    sections.push("=== Orders ===\n" + "(skipped: Order History.csv not found in ZIP)");
   }
 
   if (bundle.includeDigitalOrders && bundle.digitalOrdersCsv) {
     importRuns += 1;
-    sections.push("=== Digital Content Orders ===\n" + importAmazonRecent(bundle.digitalOrdersCsv, null, optsStr));
+    sections.push("=== Digital orders ===\n" + importAmazonRecent(bundle.digitalOrdersCsv, null, optsStr));
   } else if (bundle.includeDigitalOrders) {
-    sections.push("=== Digital Content Orders ===\n" + "(skipped: file not in ZIP)");
+    sections.push("=== Digital orders ===\n" + "(skipped: file not in ZIP)");
   }
 
   if (bundle.includeDigitalReturns && bundle.digitalReturnsCsv) {
     importRuns += 1;
     sections.push(
-      "=== Digital Returns ===\n" + importDigitalReturnsCsv(bundle.digitalReturnsCsv, optsStr, bundle.digitalOrdersCsv || null)
+      "=== Digital returns ===\n" + importDigitalReturnsCsv(bundle.digitalReturnsCsv, optsStr, bundle.digitalOrdersCsv || null)
     );
   } else if (bundle.includeDigitalReturns) {
-    sections.push("=== Digital Returns ===\n" + "(skipped: file not in ZIP)");
+    sections.push("=== Digital returns ===\n" + "(skipped: file not in ZIP)");
   }
 
   if (bundle.includeRefundDetails && bundle.refundDetailsCsv) {
     importRuns += 1;
     sections.push(
-      "=== Refund Details ===\n" + importRefundDetailsCsv(bundle.refundDetailsCsv, optsStr, bundle.orderHistoryCsv || null)
+      "=== Orders returns ===\n" + importRefundDetailsCsv(bundle.refundDetailsCsv, optsStr, bundle.orderHistoryCsv || null)
     );
   }
 
