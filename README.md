@@ -1,8 +1,17 @@
-# Tiller Quick Search
+# Tiller Tools
 
-A Google Apps Script sidebar for **Tiller** (https://tiller.com/) spreadsheets that adds a Quick Search panel. Filter your Transactions sheet by date, amount, description, account, and category. Quick Search uses your sheet’s normal basic filter and two helper columns (Match and Criteria) so you can combine its results with any other filter criteria you set directly on the sheet.
+One GitHub repo and Apps Script project for **Tiller** (https://tiller.com/) spreadsheets:
 
-## Key features
+- **Tiller Quick Search** — sidebar to filter your **Transactions** sheet by date, amount, description, account, and category (basic filter + helper columns).
+- **Tiller Amazon Import** — sidebar wizard to import Amazon order CSVs from your data-export ZIP into **Transactions** (with **AMZ Import** configuration).
+
+Repository: [github.com/daveinlosbarriles/TillerTools](https://github.com/daveinlosbarriles/TillerTools). Use **clasp** from this folder to push everything, or copy individual files into an Apps Script project as described below.
+
+This software is produced by a Tiller user and is not affiliated with Tiller LLC.
+
+---
+
+## Tiller Quick Search — key features
 
 **Search by:**
 - **Date** – range or exact From / To
@@ -18,9 +27,7 @@ A Google Apps Script sidebar for **Tiller** (https://tiller.com/) spreadsheets t
 - **Category** – one or more categories, sorted by group
 - See all of your search criteria at once in the sidebar
 
-This search function is produced by a Tiller user, and is not associated with Tiller corporation.
-
-<img width="3840" height="2063" alt="TillerQuickSearch Screenshot" src="https://github.com/user-attachments/assets/80d36566-54d4-40f0-b86d-35040a49a8e1" />
+<img width="3840" height="2063" alt="Tiller Tools screenshot" src="https://github.com/user-attachments/assets/80d36566-54d4-40f0-b86d-35040a49a8e1" />
 
 ---
 
@@ -40,25 +47,19 @@ This search function is produced by a Tiller user, and is not associated with Ti
 1. Open your Tiller Google Sheet.
 2. In the menu, click **Extensions** → **Apps Script**.  
    A new tab opens with the Apps Script editor (code view).
-3. If you see a default file like `Code.gs` with some sample code, you can replace it or add new files. You will create three items in this project:
-   - **Code.gs** – adds the “Tiller Tools” menu to your sheet  
-   - **QuickSearchSidebar.gs** – all the Quick Search logic  
-   - **QuickSearch.html** – the sidebar interface  
+3. If you see a default file like `Code.gs` with some sample code, you can replace it or add new files. For **both** Quick Search and Amazon import, add at least: **Code.gs**, **QuickSearchSidebar.gs**, **QuickSearch.html**, **amazonorders.gs**, **AmazonOrdersSidebar.html** (and optionally `AmazonOrdersDialog.html`). For **Quick Search only**, you can omit the Amazon files and remove the Amazon menu line from **Code.js**.
 
    **Creating or replacing files:**
-   - **Code.gs**  
-     - This application only needs an **onOpen** function that adds the “Tiller Tools” menu with a “Quick Search” item. You do **not** need to delete any existing code in **Code.gs**.  
-     - If **Code.gs** already exists and has code you want to keep: add the **onOpen** function from the **Code.js** file in this repo. If you already have an **onOpen** function, add the menu line to it:  
-       `SpreadsheetApp.getUi().createMenu("Tiller Tools").addItem("Quick Search", "openQuickSearchSidebar").addToUi();`  
-       (The full **Code.js** in the repo shows the complete onOpen; you can copy just that function or merge its menu into yours.)  
-     - If **Code.gs** doesn’t exist or is empty: click **+** → **Script**, name it `Code`, then paste the contents of **Code.js**.  
-     - In Apps Script, script files are saved as **.gs** (not .js). The editor will show “Code.gs” once saved. That’s correct.
+   - **Code.gs** — Add **onInstall** (calling **onOpen**) and **onOpen** from **Code.js**, or paste the whole **Code.js** as **Code.gs**. Merge carefully if you already have an **onOpen** handler. Apps Script uses the **.gs** extension on disk.
    - **QuickSearchSidebar.gs**  
      - Click **+** → **Script**, name it `QuickSearchSidebar`, then paste the contents of **QuickSearchSidebar.js** from this repo. It will appear as **QuickSearchSidebar.gs**.
    - **QuickSearch.html**  
      - Click **+** → **HTML**, name it `QuickSearch`, then paste the contents of **QuickSearch.html** from this repo. Leave the name as **QuickSearch** (no “.html” in the file list is fine).
+   - **Amazon import (optional):** Add **amazonorders.gs** and **AmazonOrdersSidebar.html** the same way (script + HTML). Match the file names the script expects (`HtmlService.createHtmlOutputFromFile("AmazonOrdersSidebar")`).
 
-4. Save everything: **File** → **Save** (or Ctrl+S). Give the project a name (e.g. “Tiller Quick Search”) if prompted.
+4. Save everything: **File** → **Save** (or Ctrl+S). Give the project a name (e.g. “Tiller Tools”) if prompted.
+
+   **Using clasp:** Clone this repo, run `clasp login` and `clasp clone` / link your Apps Script project, then `clasp push` so all `.gs` / `.html` files and `appsscript.json` stay in sync with GitHub.
 
 5. **Permissions (first run):**  
    The first time you use the script (e.g. reload the sheet and open **Tiller Tools** → **Quick Search**), Google will ask you to authorize the app:
@@ -135,19 +136,17 @@ Your Transactions sheet must have columns that match what Tiller uses (e.g. Date
 | QuickSearchSidebar.js | QuickSearchSidebar.gs | All Quick Search logic (criteria, filter, helper columns) |
 | QuickSearch.html      | QuickSearch.html  | Sidebar UI |
 | amazonorders.gs | amazonorders.gs | Amazon Orders CSV import (optional; same Apps Script project when using clasp) |
-| AmazonOrdersDialog.html | AmazonOrdersDialog.html | Import dialog HTML |
+| AmazonOrdersSidebar.html | AmazonOrdersSidebar.html | Amazon import **sidebar** wizard (ZIP, four CSV types, categories, payment hints) |
+| AmazonOrdersDialog.html | AmazonOrdersDialog.html | Legacy modal UI (unused if menu opens the sidebar) |
 | appsscript.json       | (project config) | Script settings; usually auto-managed by Apps Script |
 
-### Maintainer: two GitHub repos, one clasp project
+### Architecture
 
-**Quick Search** lives in this repo. **Amazon Orders Import** is maintained in a [separate GitHub repo](https://github.com/daveinlosbarriles/TillerAmazonOrdersCSVImport). Your Google Apps Script project can include both; `clasp push` from this folder uploads all root `.gs`/`.html` files.
+**Quick Search** and **Amazon import** do not call each other; they share only the menu in **Code.js**. Each has its own header→column map (`getTillerColumnMap` vs `amzGetTillerColumnMap`). To ship **one** feature only, delete the other’s files and drop its menu item(s) from **Code.js**.
 
-The folder `TillerAmazonOrdersCSVImport/` is **gitignored** here—clone that repo beside this one if you need to push Amazon changes to GitHub. After editing `amazonorders.gs` or `AmazonOrdersDialog.html` in **this** repo, sync the mirror and push there:
+### Source of truth
 
-```bash
-bash scripts/sync-amazon-mirror.sh
-cd TillerAmazonOrdersCSVImport && git add -A && git commit -m "…" && git push
-```
+All source for both tools is in **[TillerTools](https://github.com/daveinlosbarriles/TillerTools)**. Commit and push here; there is no separate mirror repo.
 
 ---
 
@@ -161,6 +160,6 @@ cd TillerAmazonOrdersCSVImport && git add -A && git commit -m "…" && git push
 
 ## To Uninstall
 
-1. **Remove the menu and script files:** Open **Extensions** → **Apps Script**. Remove the **onOpen** code (or the Tiller Tools menu line) from **Code.gs** so the “Tiller Tools” menu no longer appears. Delete the **QuickSearchSidebar.gs** and **QuickSearch.html** files from the project if you no longer need them.
+1. **Remove the menu and script files:** Open **Extensions** → **Apps Script**. Remove the **onInstall** / **onOpen** code (or the Tiller Tools menu) from **Code.gs** so the menu no longer appears. Delete **QuickSearchSidebar.gs**, **QuickSearch.html**, and if used **amazonorders.gs** / **AmazonOrdersSidebar.html** / **AmazonOrdersDialog.html**.
 2. **Optional – remove the helper columns:** On your **Transactions** sheet, delete the **QuickSearch** and **QuickCriteria** columns if they were added. You can delete them like any other columns (right‑click the column letter → Delete column).
 3. **Optional – clear the filter:** If a filter is still applied to the Transactions sheet, turn it off via **Data** → **Turn off filter** (or use the filter icon in the toolbar).

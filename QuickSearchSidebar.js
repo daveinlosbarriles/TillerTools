@@ -46,6 +46,22 @@ var QUICK_SEARCH_CRITERIA_HEADER = "QuickCriteria";
 // Criteria: single string in row 1 only. Format: D:dateFrom,dateTo|X:description|C:cat1,cat2|A:min,max|Q:acc1,acc2
 
 /**
+ * Row 1 header name -> 1-based column index (matches Tiller header labels).
+ * Defined here so Quick Search does not depend on any other script file; safe to use in a standalone extension.
+ */
+function getTillerColumnMap(sheet) {
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+  var map = {};
+  for (var i = 0; i < headers.length; i++) {
+    var h = headers[i];
+    if (h) {
+      map[String(h).trim()] = i + 1;
+    }
+  }
+  return map;
+}
+
+/**
  * Opens the Quick Search sidebar.
  */
 function openQuickSearchSidebar() {

@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <base target="_top">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      margin-top: 4px;
+      font-family: Arial, sans-serif;
+      font-size: 13px;
+      box-sizing: border-box;
+      background: transparent;
+      color: #222;
+      max-height: 100vh;
+      overflow-y: auto;
+    }
+    .panel { margin: 0 0 6px 0; padding: 0 0 6px 0; border-bottom: 1px solid #e0e0e0; }
+    .panel:last-of-type { border-bottom: none; }
+    .panel-hidden { display: none; }
+    .row-with-help { display: flex; justify-content: space-between; align-items: flex-start; gap: 4px; margin: 0 0 2px 0; }
+    .row-with-help .main-col { flex: 1; min-width: 0; }
+    .help-toggle {
+      flex-shrink: 0; width: 22px; height: 22px; line-height: 20px; padding: 0;
+      font-weight: bold; color: #1a73e8; border: 1px solid #1a73e8; border-radius: 50%;
+      font-size: 12px; background: transparent; cursor: pointer;
+    }
+    .help-toggle:hover { background: rgba(26, 115, 232, 0.08); }
+    .help-panel {
+      display: none; font-size: 12px; color: #555; background: transparent; border: 1px dashed #bbb;
+      padding: 4px 6px; margin: 0 0 4px 0; border-radius: 2px; line-height: 1.35;
+    }
+    .help-panel.open { display: block; }
+    .field { margin: 0 0 4px 0; }
+    label { font-weight: bold; color: #333; }
+    .inline-one-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin: 2px 0 4px 0; }
+    .inline-one-line label { margin: 0; white-space: nowrap; }
+    input[type="date"], select {
+      padding: 2px 4px; font-size: 13px;
+    }
+    .inline-field-line {
+      display: flex; align-items: center; flex-wrap: nowrap; gap: 8px;
+      margin: 2px 0 4px 0; max-width: 100%;
+    }
+    .inline-field-line label {
+      margin: 0; font-weight: bold; color: #333;
+      flex: 1 1 auto; min-width: 0;
+    }
+    .inline-field-line input[type="date"] {
+      flex: 0 0 auto; width: 9.25rem; max-width: 40%; min-width: 0;
+      box-sizing: border-box;
+    }
+    .inline-field-line select {
+      flex: 0 1 auto; max-width: 11rem; min-width: 0;
+      box-sizing: border-box;
+    }
+    .btn-row { margin: 4px 0 0 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    button {
+      padding: 4px 10px; font-size: 13px; cursor: pointer;
+      background: #e8e8e8; border: 1px solid #999; border-radius: 3px;
+    }
+    button.primary { background: #1a73e8; color: #fff; border-color: #1557b0; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #log {
+      font-family: Consolas, Menlo, monospace; font-size: 11px;
+      border: 1px solid #ccc; padding: 4px; background: transparent;
+      min-height: 48px; max-height: 180px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+    }
+    ul.files { margin: 2px 0 4px 0; padding-left: 18px; }
+    .cb-list label { font-weight: normal; display: flex; align-items: flex-start; gap: 6px; margin: 3px 0; line-height: 1.3; }
+    .cb-list input { width: auto; margin-top: 2px; }
+    .pay-miss { font-size: 12px; margin: 4px 0; padding: 4px 6px; background: rgba(255, 248, 225, 0.85); border: 1px solid #ffe082; border-radius: 2px; }
+    a { color: #1a73e8; }
+    .welcome-banner {
+      font-size: 12px; background: rgba(232, 240, 254, 0.9); border: 1px solid #aecbfa; border-radius: 2px; padding: 4px 6px; margin: 0 0 6px 0; line-height: 1.35;
+    }
+    table.pay-table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 4px 0; background: transparent; }
+    table.pay-table th, table.pay-table td { border: 1px solid #ddd; padding: 3px 4px; text-align: left; word-break: break-word; }
+    table.pay-table th { background: rgba(0, 0, 0, 0.04); font-weight: bold; }
+    .status-suggested { color: #0d652d; }
+    .status-unknown { color: #c5221f; }
+    .warn-time { font-size: 12px; color: #666; margin: 4px 0; }
+    .success-block { font-size: 13px; margin: 4px 0 0 0; padding: 6px; background: rgba(230, 244, 234, 0.9); border: 1px solid #ceead6; border-radius: 2px; line-height: 1.4; }
+    .file-pick { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; max-width: 100%; }
+    #zipFile { position: absolute; width: 0.1px; height: 0.1px; opacity: 0; overflow: hidden; z-index: -1; }
+    #zipFileName { font-size: 12px; color: #555; flex: 1; min-width: 0; word-break: break-all; }
+    .hint { font-size: 12px; color: #666; line-height: 1.3; margin: 2px 0; }
+    .section-title { font-weight: bold; margin: 0 0 4px 0; }
+    .field-include-orders { margin-top: 3px; }
+    .help-toggle-nudge-down { margin-top: 3px; }
+    .help-toggle-nudge-category { margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <div id="welcomeBanner" class="welcome-banner" style="display:none;"></div>
+
+  <!-- Panel A: Request + ZIP -->
+  <div id="panelZip" class="panel">
+    <div class="row-with-help">
+      <div class="main-col">
+        <div class="field" style="margin-bottom:0;">
+          <a href="https://www.amazon.com/hz/privacy-central/data-requests/preview.html" target="_blank" rel="noopener">Request your orders from Amazon</a>
+        </div>
+      </div>
+      <button type="button" class="help-toggle" aria-label="Help" data-help="helpRequest">?</button>
+    </div>
+    <div id="helpRequest" class="help-panel">
+      <p>Click this link, login to Amazon.com, and request that they make a zip file of all of your orders available to you. They will send you an email asking for confirmation, and after you confirm, you will receive another email with a link to the zip file. Download this zip file to your computer, and import it here. Note that it may take them a few days to complete the request.</p>
+    </div>
+
+    <div class="row-with-help">
+      <div class="main-col">
+        <div class="file-pick">
+          <button type="button" id="btnPickZip">Choose orders ZIP file</button>
+          <span id="zipFileName">No file selected</span>
+          <input type="file" id="zipFile" accept=".zip,application/zip" />
+        </div>
+      </div>
+      <button type="button" class="help-toggle" aria-label="Help" data-help="helpZip">?</button>
+    </div>
+    <div id="helpZip" class="help-panel">
+      <p>After Amazon sends you the ZIP file, use <strong>Choose orders ZIP file</strong> to select it on your computer and continue.</p>
+    </div>
+
+    <div class="btn-row">
+      <button type="button" class="primary" id="btnNext1" disabled>Next</button>
+    </div>
+  </div>
+
+  <!-- Panel B: files + types + date + category (shown after first Next) -->
+  <div id="panelFiles" class="panel panel-hidden">
+    <div class="row-with-help">
+      <div class="main-col">
+        <p class="section-title" style="margin:0;">Expected CSV files:</p>
+      </div>
+      <button type="button" class="help-toggle" aria-label="Help" data-help="helpFiles">?</button>
+    </div>
+    <div id="helpFiles" class="help-panel">
+      <p><strong>Order history.csv:</strong> Contains every Amazon order you’ve ever made.</p>
+      <p><strong>Orders returns</strong> (actually called <strong>Refund details.csv</strong>): Contains the dollar amount of every return you’ve made, but no description of what was returned – only an OrderID. If you search by OrderID on your Transactions tab you might be able to figure out what you returned.</p>
+      <p><strong>Digital orders:</strong> Every digital order.</p>
+      <p><strong>Digital returns:</strong> And every digital return. Again, no information on what was returned – just an amount and an order ID.</p>
+      <p><strong>Whole Foods/Amazon Fresh:</strong> Not everyone wants to track and report on individual grocery items from Whole Foods or Amazon Fresh. Uncheck this box if you don’t want to import these individual items.</p>
+    </div>
+    <ul class="files" id="fileList"></ul>
+
+    <div class="field field-include-orders">
+      <label>Include these types of orders:</label>
+      <div class="cb-list">
+        <label><input type="checkbox" id="cbPhysical" checked /> Orders</label>
+        <label><input type="checkbox" id="cbRefund" checked /> Orders Returns</label>
+        <label><input type="checkbox" id="cbDigital" checked /> Digital orders (Kindle books, movies, software)</label>
+        <label><input type="checkbox" id="cbDigRet" checked /> Digital returns</label>
+        <label><input type="checkbox" id="cbWF" checked /> Whole Foods / Amazon Fresh orders</label>
+      </div>
+    </div>
+
+    <div class="row-with-help">
+      <div class="main-col">
+        <div class="inline-field-line">
+          <label for="cutoff">Ignore orders older than:</label>
+          <input type="date" id="cutoff" />
+        </div>
+        <p class="hint" style="margin:6px 0 0 0;">NOTE: Duplicate transactions are never imported.</p>
+      </div>
+      <button type="button" class="help-toggle help-toggle-nudge-down" aria-label="Help" data-help="helpDate">?</button>
+    </div>
+    <div id="helpDate" class="help-panel">
+      <p>Allows you to limit how far back you go when importing orders into Tiller. You may not want that book you bought in 1999 in Tiller! We recommend overlapping a month or two from your last import, just to not miss any transactions.</p>
+      <p>Note that you can run import multiple times – duplicate transactions will not be created.</p>
+    </div>
+
+    <div class="row-with-help">
+      <div class="main-col">
+        <div class="inline-field-line">
+          <label for="offsetCat">Category for offsets</label>
+          <select id="offsetCat"><option value="">— Uncategorized —</option></select>
+        </div>
+      </div>
+      <button type="button" class="help-toggle help-toggle-nudge-category" aria-label="Help" data-help="helpCat">?</button>
+    </div>
+    <div id="helpCat" class="help-panel">
+      <p>Suggest creating a category “Amazon”, and assign all offsets to that category. Then excluding that category from reporting.</p>
+      <p>Also, all of your credit card transactions on Amazon orders should also be set to “Amazon.” This way, they cancel each other out, are both excluded from reporting, and you are only reporting on the specific items you bought, and the categories you assigned to them.</p>
+      <p>Note that we have to create offsets when importing your spending, to avoid counting that spending twice – first with your credit card transaction, and then again with the Amazon imported transaction.</p>
+    </div>
+
+    <div class="field" style="margin-top:5px;">
+      <label style="font-weight:normal;"><input type="checkbox" id="cbVerifyPaymentMethods" checked /> Check for new payment methods</label>
+    </div>
+
+    <div class="btn-row">
+      <button type="button" id="btnNext2" class="primary">Next</button>
+    </div>
+  </div>
+
+  <!-- Panel C: payment methods + import -->
+  <div id="panelPayment" class="panel panel-hidden">
+    <div id="payMethodsTitleRow" class="row-with-help" style="display:none;">
+      <div class="main-col">
+        <p class="section-title" style="margin:0;">The orders have these payment methods:</p>
+      </div>
+      <button type="button" class="help-toggle" aria-label="Help" data-help="helpPayMethods">?</button>
+    </div>
+    <div id="helpPayMethods" class="help-panel">
+      <p>You may have more than one credit card in Amazon. For each type of credit card in Amazon, you need to specify which Tiller account it corresponds to. You can find the account details on the Accounts tab. If you want to manually plug in your own values, leave the various account columns blank on <strong>AMZ Import</strong>.</p>
+    </div>
+    <div id="payPanel"></div>
+    <p id="payAccountHint" class="hint" style="display:none; margin-top:10px;">Update any incorrect or <strong>Unknown</strong> account information on the <strong>AMZ Import</strong> tab before clicking Import.</p>
+    <div class="btn-row">
+      <button type="button" id="btnImport" class="primary" style="display:none;">Import</button>
+    </div>
+    <p id="importWarnTime" class="warn-time" style="display:none; margin-top:8px;">This process may take up to 2 minutes for large Tiller and Amazon files.</p>
+  </div>
+
+  <!-- Panel D: status -->
+  <div id="panelStatus" class="panel panel-hidden">
+    <div class="field">
+      <label>Import status</label>
+      <pre id="log"></pre>
+    </div>
+    <div id="successBlock" class="success-block" style="display:none;"></div>
+    <div class="btn-row">
+      <button type="button" id="btnStartOver">Start over</button>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var state = {
+        files: {
+          orderHistory: null,
+          digitalOrders: null,
+          digitalReturns: null,
+          refundDetails: null
+        },
+        payAnalysis: null
+      };
+
+      function $(id) { return document.getElementById(id); }
+      function updatePayAccountHintVisibility(data) {
+        var rows = data && data.paymentRows ? data.paymentRows : [];
+        $("payAccountHint").style.display = rows.length ? "block" : "none";
+      }
+      function showPayMethodsTitle(show) {
+        var t = $("payMethodsTitleRow");
+        if (t) t.style.display = show ? "flex" : "none";
+      }
+      function showImportButton(show) {
+        var b = $("btnImport");
+        if (b) b.style.display = show ? "inline-block" : "none";
+      }
+      function refreshNext2ButtonLabel() {
+        var verify = $("cbVerifyPaymentMethods") && $("cbVerifyPaymentMethods").checked;
+        $("btnNext2").textContent = verify ? "Next" : "Import";
+      }
+      function runAmazonImport() {
+        var w = $("importWarnTime");
+        if (w) w.style.display = "block";
+        $("panelStatus").classList.remove("panel-hidden");
+        $("log").textContent = "";
+        $("successBlock").style.display = "none";
+        $("successBlock").textContent = "";
+        log("Starting import…");
+
+        var runOH = $("cbPhysical").checked || $("cbWF").checked;
+        var steps = [];
+        if (runOH) steps.push("orderHistory");
+        if ($("cbDigital").checked) steps.push("digitalOrders");
+        if ($("cbDigRet").checked) steps.push("digitalReturns");
+        if ($("cbRefund").checked) steps.push("refundDetails");
+
+        if (!steps.length) {
+          log("No import steps were run. Select at least one order type and ensure the ZIP contains the matching CSV(s).");
+          $("panelStatus").scrollIntoView({ behavior: "smooth", block: "nearest" });
+          return;
+        }
+
+        var ts = null;
+        var anyImport = false;
+        var qi = 0;
+
+        function basePayload() {
+          var p = {
+            cutoffDateIso: $("cutoff").value,
+            offsetCategory: $("offsetCat").value || "",
+            includePhysicalOrders: $("cbPhysical").checked,
+            includeWholeFoods: $("cbWF").checked,
+            includeDigitalOrders: $("cbDigital").checked,
+            includeDigitalReturns: $("cbDigRet").checked,
+            includeRefundDetails: $("cbRefund").checked
+          };
+          if (ts) p.bundleImportTimestampIso = ts;
+          return p;
+        }
+
+        function showImportDone() {
+          log("");
+          log("=== Import finished ===");
+          $("successBlock").style.display = "block";
+          $("successBlock").innerHTML =
+            "Your transactions have been imported, and are visible on the <strong>Transactions</strong> sheet.<br><br>" +
+            "If you want to reverse this import, just delete the individual transactions now showing on the Transactions sheet.";
+          $("panelStatus").scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }
+
+        function failImport(err) {
+          log("Server error: " + (err && err.message ? err.message : String(err)));
+          $("panelStatus").scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }
+
+        function runFinalize() {
+          var p = basePayload();
+          p.step = "finalize";
+          google.script.run
+            .withSuccessHandler(function (res) {
+              if (res && res.bundleImportTimestampIso) ts = res.bundleImportTimestampIso;
+              if (res && res.log) log(String(res.log));
+              showImportDone();
+            })
+            .withFailureHandler(failImport)
+            .importAmazonBundleChunk(JSON.stringify(p));
+        }
+
+        function pump() {
+          if (qi >= steps.length) {
+            if (anyImport) runFinalize();
+            else showImportDone();
+            return;
+          }
+          var step = steps[qi++];
+          var p = basePayload();
+          p.step = step;
+          if (step === "orderHistory") p.orderHistoryCsv = state.files.orderHistory;
+          if (step === "digitalOrders") p.digitalOrdersCsv = state.files.digitalOrders;
+          if (step === "digitalReturns") {
+            p.digitalReturnsCsv = state.files.digitalReturns;
+            p.digitalOrdersCsv = state.files.digitalOrders;
+          }
+          if (step === "refundDetails") {
+            p.refundDetailsCsv = state.files.refundDetails;
+            p.orderHistoryCsv = state.files.orderHistory;
+          }
+
+          google.script.run
+            .withSuccessHandler(function (res) {
+              if (!res || typeof res !== "object") {
+                failImport(new Error("Unexpected server response."));
+                return;
+              }
+              if (res.bundleImportTimestampIso) ts = res.bundleImportTimestampIso;
+              if (res.didImport) anyImport = true;
+              if (res.log) log(String(res.log));
+              pump();
+            })
+            .withFailureHandler(failImport)
+            .importAmazonBundleChunk(JSON.stringify(p));
+        }
+
+        pump();
+      }
+      function log(msg) {
+        var el = $("log");
+        el.textContent += msg + "\n";
+        el.scrollTop = el.scrollHeight;
+      }
+
+      function bindHelpToggles() {
+        document.querySelectorAll(".help-toggle").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            var id = btn.getAttribute("data-help");
+            var panel = id ? $(id) : null;
+            if (!panel) return;
+            var open = panel.classList.toggle("open");
+            btn.setAttribute("aria-expanded", open ? "true" : "false");
+          });
+        });
+      }
+      bindHelpToggles();
+
+      function basenameLower(path) {
+        var parts = path.split(/[/\\]/);
+        return parts[parts.length - 1].toLowerCase();
+      }
+
+      function discoverZip(zip) {
+        var files = { orderHistory: null, digitalOrders: null, digitalReturns: null, refundDetails: null };
+        var tasks = [];
+        zip.forEach(function (relativePath, entry) {
+          if (entry.dir) return;
+          var b = basenameLower(relativePath);
+          var p = null;
+          if (b === "order history.csv") p = "orderHistory";
+          else if (b === "digital content orders.csv") p = "digitalOrders";
+          else if (b === "digital returns.csv") p = "digitalReturns";
+          else if (b === "refund details.csv" || b === "returns.csv") p = "refundDetails";
+          if (p) {
+            tasks.push(entry.async("string").then(function (text) {
+              files[p] = text;
+            }));
+          }
+        });
+        return Promise.all(tasks).then(function () { return files; });
+      }
+
+      function escapeHtml(s) {
+        var d = document.createElement("div");
+        d.textContent = s;
+        return d.innerHTML;
+      }
+
+      function renderPaymentTable(data) {
+        var rows = data.paymentRows || [];
+        if (!rows.length) {
+          return "<p class=\"pay-miss\">No payment methods in range (or Order History missing / filtered out).</p>";
+        }
+        var html = "<table class=\"pay-table\"><thead><tr><th>Payment method</th><th>Account</th><th>Account #</th><th>Institution</th></tr></thead><tbody>";
+        for (var i = 0; i < rows.length; i++) {
+          var r = rows[i];
+          var cls = r.status === "suggested" ? " status-suggested" : r.status === "unknown" ? " status-unknown" : "";
+          html += "<tr><td>" + escapeHtml(r.paymentType) + "</td><td class=\"" + cls + "\">" + escapeHtml(r.ACCOUNT) + "</td><td>" + escapeHtml(r.ACCOUNT_NUMBER) + "</td><td>" + escapeHtml(r.INSTITUTION) + "</td></tr>";
+        }
+        html += "</tbody></table>";
+        return html;
+      }
+
+      function buildInsertPayloadFromMissing(missing) {
+        var rows = [];
+        for (var i = 0; i < missing.length; i++) {
+          var m = missing[i];
+          if (!m.suggested) continue;
+          rows.push({
+            paymentType: m.paymentType,
+            ACCOUNT: m.suggested.ACCOUNT,
+            ACCOUNT_NUMBER: m.suggested.ACCOUNT_NUMBER,
+            INSTITUTION: m.suggested.INSTITUTION,
+            ACCOUNT_ID: m.suggested.ACCOUNT_ID
+          });
+        }
+        return rows;
+      }
+
+      /** After AMZ Import rows are added, mark those payment types configured without re-parsing the CSV. */
+      function mergePaymentRowsAfterInsert(data, toInsert) {
+        if (!data || !data.paymentRows || !toInsert || !toInsert.length) return data;
+        var types = {};
+        for (var i = 0; i < toInsert.length; i++) {
+          var t = toInsert[i];
+          types[String(t.paymentType).trim().toLowerCase()] = t;
+        }
+        for (var j = 0; j < data.paymentRows.length; j++) {
+          var pr = data.paymentRows[j];
+          var key = String(pr.paymentType).trim().toLowerCase();
+          if (types[key] && pr.status === "suggested") {
+            var ins = types[key];
+            pr.status = "configured";
+            pr.ACCOUNT = ins.ACCOUNT;
+            pr.ACCOUNT_NUMBER = ins.ACCOUNT_NUMBER;
+            pr.INSTITUTION = ins.INSTITUTION;
+            pr.ACCOUNT_ID = ins.ACCOUNT_ID;
+          }
+        }
+        return data;
+      }
+
+      function runPaymentAnalysisThenMaybeInsert() {
+        var incP = $("cbPhysical").checked;
+        var incWf = $("cbWF").checked;
+        var oh = state.files.orderHistory;
+        var cutoff = $("cutoff").value;
+        $("payPanel").innerHTML = "<p>Scanning Amazon files for payment methods…</p>";
+        updatePayAccountHintVisibility(null);
+        showPayMethodsTitle(false);
+        showImportButton(false);
+
+        if (!(incP || incWf) || !oh) {
+          $("payPanel").innerHTML = "<p class=\"pay-miss\">Order History is not included or physical/Whole Foods filters exclude it — skipped payment analysis.</p>";
+          state.payAnalysis = { ok: true, paymentRows: [], missing: [] };
+          updatePayAccountHintVisibility(state.payAnalysis);
+          showPayMethodsTitle(true);
+          showImportButton(true);
+          return;
+        }
+
+        google.script.run
+          .withSuccessHandler(function (jsonStr) {
+            try {
+              var data = JSON.parse(jsonStr);
+              if (!data.ok) {
+                $("payPanel").innerHTML = "<p class=\"pay-miss\">" + escapeHtml(data.error || "Analysis failed.") + "</p>";
+                state.payAnalysis = null;
+                updatePayAccountHintVisibility(null);
+                showPayMethodsTitle(true);
+                showImportButton(true);
+                return;
+              }
+              state.payAnalysis = data;
+              $("payPanel").innerHTML = renderPaymentTable(data);
+              updatePayAccountHintVisibility(data);
+              showPayMethodsTitle(true);
+              showImportButton(true);
+
+              var toInsert = buildInsertPayloadFromMissing(data.missing || []);
+              if (!toInsert.length) return;
+
+              google.script.run
+                .withSuccessHandler(function (insertMsg) {
+                  var insertNote = "";
+                  if (insertMsg) {
+                    if (String(insertMsg).indexOf("Error:") === 0) {
+                      insertNote = "<p class=\"pay-miss\">" + escapeHtml(insertMsg) + "</p>";
+                    } else {
+                      insertNote = "<p class=\"hint\">" + escapeHtml(insertMsg) + "</p>";
+                    }
+                  }
+                  // One CSV parse only: update rows locally after insert (no second analyzePaymentMethodsForOrderHistory).
+                  if (
+                    insertMsg &&
+                    String(insertMsg).indexOf("Error:") !== 0 &&
+                    String(insertMsg).indexOf("All suggested payment types already exist") === -1
+                  ) {
+                    mergePaymentRowsAfterInsert(data, toInsert);
+                    state.payAnalysis = data;
+                  }
+                  $("payPanel").innerHTML =
+                    renderPaymentTable(data) +
+                    insertNote +
+                    "<p class=\"hint\">Review the <strong>AMZ Import</strong> tab if you need to edit any payment row.</p>";
+                  updatePayAccountHintVisibility(data);
+                })
+                .withFailureHandler(function (err) {
+                  $("payPanel").innerHTML =
+                    renderPaymentTable(data) +
+                    "<p class=\"pay-miss\">Could not add suggested rows: " +
+                    escapeHtml(err.message || String(err)) +
+                    "</p>";
+                  updatePayAccountHintVisibility(data);
+                })
+                .insertSuggestedAmzPaymentRows(JSON.stringify(toInsert));
+            } catch (ex) {
+              $("payPanel").innerHTML = "<p class=\"pay-miss\">Invalid response from server.</p>";
+              updatePayAccountHintVisibility(null);
+              showPayMethodsTitle(true);
+              showImportButton(true);
+            }
+          })
+          .withFailureHandler(function (err) {
+            $("payPanel").innerHTML = "<p class=\"pay-miss\">" + escapeHtml(err.message || String(err)) + "</p>";
+            updatePayAccountHintVisibility(null);
+            showPayMethodsTitle(true);
+            showImportButton(true);
+          })
+          .analyzePaymentMethodsForOrderHistory(oh, cutoff, incP, incWf);
+      }
+
+      google.script.run.withSuccessHandler(function (init) {
+        if (init && init.defaultCutoffIso) {
+          $("cutoff").value = init.defaultCutoffIso;
+        }
+        var sel = $("offsetCat");
+        if (init && init.categories && init.categories.length) {
+          init.categories.forEach(function (c) {
+            var opt = document.createElement("option");
+            opt.value = c;
+            opt.textContent = c;
+            sel.appendChild(opt);
+          });
+        }
+        if (init && init.showAmzWelcomeBanner) {
+          $("welcomeBanner").style.display = "block";
+          $("welcomeBanner").innerHTML =
+            "<strong>AMZ Import</strong> was created with default settings and sample payment rows. " +
+            "You can add or edit payment types on the <strong>AMZ Import</strong> tab; this wizard can also add rows from your <strong>Accounts</strong> tab after you choose your ZIP and continue.";
+        }
+      }).withFailureHandler(function () {}).getAmazonSidebarInit();
+
+      $("btnPickZip").addEventListener("click", function () {
+        $("zipFile").click();
+      });
+
+      $("zipFile").addEventListener("change", function () {
+        var f = $("zipFile").files[0];
+        $("btnNext1").disabled = !f;
+        $("zipFileName").textContent = f ? f.name : "No file selected";
+      });
+
+      $("btnNext1").addEventListener("click", function () {
+        var f = $("zipFile").files[0];
+        if (!f) return;
+        $("btnNext1").disabled = true;
+        var reader = new FileReader();
+        reader.onload = function (e) {
+          JSZip.loadAsync(e.target.result).then(function (zip) {
+            return discoverZip(zip);
+          }).then(function (files) {
+            state.files = files;
+            var list = $("fileList");
+            list.innerHTML = "";
+            var labels = [
+              ["orderHistory", "Order History.csv"],
+              ["refundDetails", "Refund Details.csv"],
+              ["digitalOrders", "Digital Content Orders.csv"],
+              ["digitalReturns", "Digital Returns.csv"]
+            ];
+            labels.forEach(function (pair) {
+              var li = document.createElement("li");
+              li.innerHTML = pair[1] + " — " + (files[pair[0]] ? "<strong>found</strong>" : "not found");
+              list.appendChild(li);
+            });
+            $("btnNext1").disabled = false;
+            $("panelFiles").classList.remove("panel-hidden");
+            $("panelFiles").scrollIntoView({ behavior: "smooth", block: "nearest" });
+          }).catch(function (err) {
+            alert("Could not read ZIP: " + (err && err.message ? err.message : err));
+            $("btnNext1").disabled = false;
+          });
+        };
+        reader.onerror = function () {
+          alert("File read failed.");
+          $("btnNext1").disabled = false;
+        };
+        reader.readAsArrayBuffer(f);
+      });
+
+      $("cbVerifyPaymentMethods").addEventListener("change", refreshNext2ButtonLabel);
+      refreshNext2ButtonLabel();
+
+      $("btnNext2").addEventListener("click", function () {
+        if ($("cbVerifyPaymentMethods").checked) {
+          $("panelPayment").classList.remove("panel-hidden");
+          runPaymentAnalysisThenMaybeInsert();
+          $("panelPayment").scrollIntoView({ behavior: "smooth", block: "nearest" });
+        } else {
+          runAmazonImport();
+        }
+      });
+
+      $("btnImport").addEventListener("click", runAmazonImport);
+
+      $("btnStartOver").addEventListener("click", function () {
+        state.files = { orderHistory: null, digitalOrders: null, digitalReturns: null, refundDetails: null };
+        state.payAnalysis = null;
+        $("zipFile").value = "";
+        $("zipFileName").textContent = "No file selected";
+        $("btnNext1").disabled = true;
+        if ($("cbVerifyPaymentMethods")) $("cbVerifyPaymentMethods").checked = true;
+        refreshNext2ButtonLabel();
+        $("payPanel").innerHTML = "";
+        updatePayAccountHintVisibility(null);
+        showPayMethodsTitle(false);
+        showImportButton(false);
+        $("log").textContent = "";
+        $("successBlock").style.display = "none";
+        var w = $("importWarnTime");
+        if (w) w.style.display = "none";
+        $("panelFiles").classList.add("panel-hidden");
+        $("panelPayment").classList.add("panel-hidden");
+        $("panelStatus").classList.add("panel-hidden");
+        document.querySelectorAll(".help-panel").forEach(function (p) { p.classList.remove("open"); });
+        document.querySelectorAll(".help-toggle").forEach(function (b) { b.setAttribute("aria-expanded", "false"); });
+        window.scrollTo(0, 0);
+      });
+    })();
+  </script>
+</body>
+</html>

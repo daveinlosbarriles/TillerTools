@@ -1,15 +1,20 @@
 // Amazon Orders Import: CSV upload and append to Tiller Transactions sheet.
 // Independent of Code.gs; menu in Code.gs calls importAmazonCSV_LocalUpload() defined here.
 // Runtime config is read from the "AMZ Import" sheet; defaults below are used only when creating that sheet.
+//
+// Global scope: all top-level const identifiers use an AMZ_ prefix to avoid collisions with
+// QuickSearchSidebar.js when both are in one project (same TillerTools repo). You can copy this
+// file plus Amazon HTML + a minimal Code.gs into a standalone project if needed.
 
 const AMZ_IMPORT_SHEET_NAME = "AMZ Import";
 
 /** Header that identifies a Digital Content Orders CSV (takes precedence if both markers exist). */
-const DIGITAL_MARKER_HEADER = "Digital Order Item ID";
+const AMZ_DIGITAL_MARKER_HEADER = "Digital Order Item ID";
 /** Header that identifies a standard Order History CSV. */
-const STANDARD_MARKER_HEADER = "Carrier Name & Tracking Number";
+const AMZ_STANDARD_MARKER_HEADER = "Carrier Name & Tracking Number";
 
-const TILLER_CONFIG = {
+/** Legacy reference (unused); Transactions column names live on AMZ Import Table 4. */
+const AMZ_TILLER_CONFIG = {
   SHEET_NAME: "Transactions",
   COLUMNS: {
     DATE: "Date",
@@ -32,9 +37,13 @@ const TILLER_CONFIG = {
 const AMZ_IMPORT_DEFAULTS = {
   INTRO_ROW: "The below settings are for managing Amazon Order CSV Import.",
   TABLE1_INTRO: "Add one row for each credit card you use with Amazon, and the appropriate values from your Tiller Accounts tab.",
-  TABLE1_HEADERS: ["Payment Type", "Account", "Account #", "Institution", "Account ID", "User for Digital orders?"],
+  TABLE1_HEADERS: ["Payment Type", "Account", "Account #", "Institution", "Account ID", "Use for Digital orders?"],
   TABLE1_ROWS: [
-    ["Visa - 8534", "Chase Amazon Visa", "xxxx8534", "Chase", "636838acde7b2a0033ff46d5", "No"]
+    ["Visa - 8534", "Chase Amazon Visa", "xxxx8534", "Chase", "636838acde7b2a0033ff46d5", "Yes"],
+    ["Not Available", "Amex", "xxxx4004", "American Express", "636838eea1c01b00330ba247", "No"],
+    ["Gift Certificate/Card and Visa - 8534", "Chase Amazon Visa", "xxxx8534", "Chase", "636838acde7b2a0033ff46d5", "No"],
+    ["AmericanExpress - 2008", "Amex", "xxxx4004", "American Express", "636838eea1c01b00330ba247", "No"],
+    ["AmericanExpress - 2008 and Gift Certificate/Card", "Amex", "xxxx4004", "American Express", "636838eea1c01b00330ba247", "No"]
   ],
   TABLE2_INTRO: "Edit the left column only if Amazon changes the column names again in the CSV.",
   TABLE2_HEADERS: ["Amazon CSV column name", "Digital Orders CSV column name", "Name in Code"],
@@ -44,7 +53,7 @@ const AMZ_IMPORT_DEFAULTS = {
     ["Product Name", "Product Name", "Product Name"],
     ["Total Amount", "Transaction Amount", "Total Amount"],
     ["ASIN", "ASIN", "ASIN"],
-    ["Payment Method Type", "Payment Method", "Payment Method Type"],
+    ["Payment Method Type", "Payment Information", "Payment Method Type"],
     ["Carrier Name & Tracking Number", "", "Carrier Name & Tracking Number"],
     ["Original Quantity", "Original Quantity", "Original Quantity"],
     ["Purchase Order Number", "", "Purchase Order Number"],
@@ -64,7 +73,7 @@ const AMZ_IMPORT_DEFAULTS = {
     ["Unit Price Tax", "Price Tax", "unit-price-tax"],
     ["Shipping Charge", "", "shipping-charge"],
     ["Total Discounts", "", "total-discounts"],
-    ["Total Amount", "", "total"],
+    ["Total Amount", "Transaction Amount", "total"],
     ["Ship Date", "", "ship-date"],
     ["Carrier Name & Tracking Number", "", "tracking"],
     ["Payment Method Type", "Payment Information", "payment-type"],
@@ -93,7 +102,7 @@ const AMZ_IMPORT_DEFAULTS = {
 };
 
 // Logical field names required in core mapping (Table 2) for standard Order History imports (legacy 2-column sheet).
-const REQUIRED_CORE_FIELDS = [
+const AMZ_REQUIRED_CORE_FIELDS = [
   "Order Date",
   "Order ID",
   "Product Name",
@@ -103,7 +112,7 @@ const REQUIRED_CORE_FIELDS = [
 ];
 
 // Required keys in Tiller labels (Table 4).
-const REQUIRED_TILLER_LABEL_KEYS = [
+const AMZ_REQUIRED_TILLER_LABEL_KEYS = [
   "SHEET_NAME", "DATE", "DESCRIPTION", "AMOUNT", "TRANSACTION_ID",
   "FULL_DESCRIPTION", "DATE_ADDED", "MONTH", "WEEK", "ACCOUNT",
   "ACCOUNT_NUMBER", "INSTITUTION", "ACCOUNT_ID", "METADATA"
@@ -111,11 +120,692 @@ const REQUIRED_TILLER_LABEL_KEYS = [
 
 const AMZ_IMPORT_INVALID_MSG = "AMZ Import configuration settings are missing or invalid. Suggest deleting that tab to load default values.";
 
-function generateGuid() {
+/** Normalize payment type strings so sheet vs CSV match (NBSP, repeated spaces). */
+function amzNormalizePaymentTypeKey(s) {
+  return String(s || "")
+    .replace(/\u00A0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * True if column A marks the start of Table 2+ (not a payment type row in Table 1).
+ * Without this, a missing blank row between tables makes the insert target the wrong row.
+ */
+function amzIsAmzPaymentTableBoundaryRow(fcNormalized) {
+  const fc = amzNormalizePaymentTypeKey(fcNormalized);
+  if (!fc) return true;
+  if (fc === "Amazon CSV column name") return true;
+  if (fc === "Digital Orders CSV column name") return true;
+  if (AMZ_IMPORT_DEFAULTS.TABLE2_INTRO && fc === AMZ_IMPORT_DEFAULTS.TABLE2_INTRO) return true;
+  if (AMZ_IMPORT_DEFAULTS.TABLE3_INTRO && fc === AMZ_IMPORT_DEFAULTS.TABLE3_INTRO) return true;
+  if (AMZ_IMPORT_DEFAULTS.TABLE4_TITLE && fc === AMZ_IMPORT_DEFAULTS.TABLE4_TITLE) return true;
+  if (AMZ_IMPORT_DEFAULTS.TABLE1_INTRO && fc === AMZ_IMPORT_DEFAULTS.TABLE1_INTRO) return true;
+  if (fc.indexOf("Edit the left column only") === 0) return true;
+  if (fc.indexOf("Only edit left column") === 0) return true;
+  if (fc === "Name in Code" || fc === "Tiller label") return true;
+  return false;
+}
+
+/** Whole Foods / Amazon Fresh rows in Order History use Website = panda01 (case-insensitive). */
+const AMZ_WHOLE_FOODS_WEBSITE = "panda01";
+
+/** Amazon import helpers: distinct names from QuickSearchSidebar.js (same project global scope). */
+const AMZ_ACCOUNTS_SHEET_NAME = "Accounts";
+/** Accounts sheet: Unique Account Identifier (match 4-digit token from payment string). */
+const AMZ_ACCOUNTS_COL_UNIQUE_ID = 6;
+/** Account Id (for AMZ Import Account ID column). */
+const AMZ_ACCOUNTS_COL_ACCOUNT_ID_FIELD = 7;
+const AMZ_ACCOUNTS_COL_ACCOUNT = 10;
+const AMZ_ACCOUNTS_COL_ACCOUNT_NUMBER = 11;
+const AMZ_ACCOUNTS_COL_INSTITUTION = 12;
+
+const AMZ_CATEGORIES_SHEET_NAME = "Categories";
+
+/** Expected ZIP entry names (basename match is case-insensitive). */
+const AMZ_ZIP_ORDER_HISTORY = "order history.csv";
+const AMZ_ZIP_DIGITAL_ORDERS = "digital content orders.csv";
+const AMZ_ZIP_DIGITAL_RETURNS = "digital returns.csv";
+const AMZ_ZIP_REFUND_DETAILS = "refund details.csv";
+
+function amzGenerateGuid() {
   return Utilities.getUuid();
 }
 
-function getWeekStartDate(date) {
+/** Empty Tiller account fields when payment cannot be resolved (user may edit manually). */
+function amzEmptyAccountRow() {
+  return { ACCOUNT: "", ACCOUNT_NUMBER: "", INSTITUTION: "", ACCOUNT_ID: "" };
+}
+
+/**
+ * Last row wins per Order ID. Requires standard or digital file type and mapped Order ID + Payment columns.
+ * @returns {Object<string, string>} orderId -> payment method string
+ */
+function amzOrderIdToPaymentStringMapFromCsv(csvText, config, isDigital) {
+  const map = {};
+  if (!csvText || String(csvText).trim() === "") return map;
+  const csv = Utilities.parseCsv(csvText);
+  if (!csv.length || !csv[0].length) return map;
+  const headers = csv[0];
+  const col = {};
+  headers.forEach(function (h, i) {
+    if (h != null && String(h).trim() !== "") col[String(h).trim()] = i;
+  });
+  const kind = amzDetectAmazonCsvFileType(col);
+  if (isDigital && kind !== "digital") return map;
+  if (!isDigital && kind !== "standard") return map;
+  const orderIdCol = amzGetCoreCsvColumn(config, "Order ID", isDigital);
+  const payCol = amzGetCoreCsvColumn(config, "Payment Method Type", isDigital);
+  if (!orderIdCol || !payCol || col[orderIdCol] === undefined || col[payCol] === undefined) return map;
+  for (let i = 1; i < csv.length; i++) {
+    const r = csv[i];
+    const oid = String(r[col[orderIdCol]] == null ? "" : r[col[orderIdCol]]).trim();
+    if (!oid) continue;
+    map[oid] = String(r[col[payCol]] == null ? "" : r[col[payCol]]).trim();
+  }
+  return map;
+}
+
+function amzResolvePhysicalRefundAccountRow(paymentStr, paymentAccounts) {
+  const pt = String(paymentStr || "").trim();
+  if (pt) {
+    const row = amzLookupPaymentAccountRow(paymentAccounts, pt);
+    if (row) return row;
+  }
+  return amzEmptyAccountRow();
+}
+
+/**
+ * Digital returns: prefer Order ID join to Digital Content Orders payment string, then digital user row.
+ */
+function amzResolveDigitalReturnAccountRow(orderId, paymentByOrder, paymentAccounts, digitalUserAccount) {
+  const oid = String(orderId == null ? "" : orderId).trim();
+  const pt = oid && paymentByOrder[oid] != null ? String(paymentByOrder[oid]).trim() : "";
+  if (pt) {
+    const row = amzLookupPaymentAccountRow(paymentAccounts, pt);
+    if (row) return row;
+  }
+  if (digitalUserAccount != null) {
+    return {
+      ACCOUNT: digitalUserAccount.ACCOUNT != null ? String(digitalUserAccount.ACCOUNT) : "",
+      ACCOUNT_NUMBER: digitalUserAccount.ACCOUNT_NUMBER != null ? String(digitalUserAccount.ACCOUNT_NUMBER) : "",
+      INSTITUTION: digitalUserAccount.INSTITUTION != null ? String(digitalUserAccount.INSTITUTION) : "",
+      ACCOUNT_ID: digitalUserAccount.ACCOUNT_ID != null ? String(digitalUserAccount.ACCOUNT_ID) : ""
+    };
+  }
+  return amzEmptyAccountRow();
+}
+
+/**
+ * @param {*} options - Optional JSON string or object with cutoffDateIso, offsetCategory, skipPanda01, skipNonPanda01,
+ *   deferTransactionsSheetPostProcess, bundleImportTimestampIso
+ */
+function amzParseImportAmazonOptions(options) {
+  let opts = {};
+  if (options == null || options === "") return opts;
+  if (typeof options === "string") {
+    try {
+      opts = JSON.parse(options);
+    } catch (e) {
+      opts = {};
+    }
+  } else if (typeof options === "object") {
+    opts = options;
+  }
+  return opts;
+}
+
+/** Parse "yyyy-MM-dd HH:mm:ss" (script timezone) for bundle imports. */
+function amzParseImportTimestampToDate(s) {
+  const str = String(s || "").trim();
+  const m = str.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/);
+  if (!m) return new Date();
+  return new Date(
+    Number(m[1]),
+    Number(m[2]) - 1,
+    Number(m[3]),
+    Number(m[4]),
+    Number(m[5]),
+    Number(m[6])
+  );
+}
+
+/**
+ * Sort + Metadata filter using an already-resolved Transactions sheet and column map (no AMZ Import re-read).
+ * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} ss
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {Object} tillerCols
+ * @param {Object} tillerLabels
+ * @param {string} sheetName
+ * @param {string} filterSubstr - Trimmed substring for Metadata filter; empty skips filter (sort still runs).
+ * @returns {Array<string>} Log lines
+ */
+function amzApplyTransactionsSortAndFilterCore_(ss, sheet, tillerCols, tillerLabels, sheetName, filterSubstr) {
+  const lines = [];
+  const metaCol = tillerCols[tillerLabels.METADATA];
+  const willSetMetadataFilter = metaCol && filterSubstr !== "";
+
+  // Sort must run on the full data range; an active filter can block rows from reordering.
+  try {
+    const existingFilter = sheet.getFilter();
+    if (existingFilter) {
+      existingFilter.remove();
+    }
+  } catch (e) {
+    // continue
+  }
+  SpreadsheetApp.flush();
+
+  const tSortStart = Date.now();
+  const dateCol = tillerCols[tillerLabels.DATE];
+  let sortLastRow = 0;
+  try {
+    sortLastRow = sheet.getLastRow();
+  } catch (e) {
+    sortLastRow = 0;
+  }
+  const sortLastCol = Math.max(amzNumColsForTransactionRowsSafe(sheet, tillerCols), dateCol);
+
+  if (sortLastRow >= 2 && sortLastCol >= 1 && dateCol >= 1) {
+    try {
+      // Prefer Range.sort on data rows only — much faster than Sheet.sort on large grids.
+      const sortRange = sheet.getRange(2, 1, sortLastRow, sortLastCol);
+      const colInRange = dateCol - sortRange.getColumn() + 1;
+      sortRange.sort([{ column: colInRange, ascending: false }]);
+      SpreadsheetApp.flush();
+    } catch (e) {
+      const prevFrozen = sheet.getFrozenRows();
+      let frozenTouched = false;
+      if (prevFrozen < 1) {
+        try {
+          sheet.setFrozenRows(1);
+          frozenTouched = true;
+          SpreadsheetApp.flush();
+        } catch (frErr) {
+          /* ignore */
+        }
+      }
+      try {
+        sheet.sort(dateCol, false);
+        SpreadsheetApp.flush();
+      } catch (e2) {
+        lines.push(
+          "Error: sort by Date failed: " +
+            (e.message || String(e)) +
+            " / sheet.sort: " +
+            (e2.message || String(e2))
+        );
+      }
+      if (frozenTouched) {
+        try {
+          sheet.setFrozenRows(prevFrozen);
+          SpreadsheetApp.flush();
+        } catch (e3) {
+          /* ignore */
+        }
+      }
+    }
+  }
+  const tSortEnd = Date.now();
+  lines.push(
+    "Server: sort sheet by Date: " + ((tSortEnd - tSortStart) / 1000).toFixed(2) + " s"
+  );
+
+  if (willSetMetadataFilter) {
+    let lastRowRaw = 0;
+    let maxRows = 0;
+    let maxCols = 0;
+    let numColsForFilter = 0;
+    try {
+      // Basic filter was already removed before sort (see block above). Do not call getFilter() again
+      // here — it can throw "coordinates outside dimensions" on some sheets and abort before dimensions.
+      try {
+        SpreadsheetApp.flush();
+      } catch (flushErr) {
+        /* ignore */
+      }
+
+      const sh = ss.getSheetByName(sheetName) || sheet;
+      try {
+        lastRowRaw = sh.getLastRow();
+      } catch (e) {
+        lastRowRaw = 0;
+      }
+      try {
+        maxRows = sh.getMaxRows();
+      } catch (e) {
+        maxRows = 0;
+      }
+      try {
+        maxCols = sh.getMaxColumns();
+      } catch (e) {
+        maxCols = 0;
+      }
+      const numColsBase = amzNumColsForTransactionRowsSafe(sh, tillerCols);
+      let lastRowForFilter = Math.max(lastRowRaw, 1);
+      if (maxRows > 0) {
+        lastRowForFilter = Math.min(lastRowForFilter, maxRows);
+      }
+      numColsForFilter = Math.max(numColsBase, metaCol, 1);
+      if (maxCols > 0) {
+        numColsForFilter = Math.min(numColsForFilter, maxCols);
+      }
+
+      amzEnsureSheetGridCovers(sh, lastRowForFilter, numColsForFilter);
+
+      if (lastRowForFilter < 1 || numColsForFilter < 1) {
+        lines.push(
+          "Warning: Metadata filter skipped: invalid dimensions (lastRowForFilter=" +
+            lastRowForFilter +
+            " numColsForFilter=" +
+            numColsForFilter +
+            ")."
+        );
+      } else if (metaCol > numColsForFilter) {
+        lines.push(
+          "Warning: Metadata filter skipped: Metadata column " +
+            metaCol +
+            " exceeds usable filter width " +
+            numColsForFilter +
+            " (maxCols=" +
+            maxCols +
+            ")."
+        );
+      } else {
+        const dataRange = sh.getRange(1, 1, lastRowForFilter, numColsForFilter);
+        const filter = dataRange.createFilter();
+        const criteria = SpreadsheetApp.newFilterCriteria().whenTextContains(filterSubstr).build();
+        const colInRange = metaCol - dataRange.getColumn() + 1;
+        filter.setColumnFilterCriteria(colInRange, criteria);
+      }
+    } catch (e) {
+      let msg =
+        "Warning: Metadata filter failed: " +
+        (e.message || String(e)) +
+        " (lastRow=" +
+        lastRowRaw +
+        " maxRows=" +
+        maxRows +
+        " filterCols=" +
+        numColsForFilter +
+        " maxCols=" +
+        maxCols +
+        " metaCol=" +
+        metaCol +
+        ")";
+      if (maxRows === 0 || maxCols === 0) {
+        msg +=
+          " [grid reported maxRows/maxCols=0; filter range no longer clamps to those zeros]";
+      }
+      lines.push(msg);
+    }
+  }
+
+  return lines;
+}
+
+/**
+ * Sort Transactions by Date (desc) and set Metadata filter to this import run.
+ * Loads AMZ Import config and Transactions sheet — use amzApplyTransactionsSortAndFilterCore_ from import paths
+ * that already have sheet/tillerCols to avoid a second config read.
+ * @param {string} importTimestampStr - Substring for Metadata filter (typically yyyy-MM-dd HH:mm:ss for this run).
+ * @param {{ metadataFilterContains?: string }|undefined} opts - If set, overrides filter text (TestFilterSort only).
+ * @returns {Array<string>} Log lines for the sidebar
+ */
+function amzApplyTransactionsSortAndFilter(importTimestampStr, opts) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const amzResult = getOrCreateAmzImportSheet();
+  const config = readAmzImportConfig(amzResult.sheet);
+  const tillerLabels = config.tillerLabels;
+  const sheetName = tillerLabels.SHEET_NAME;
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    return ["Error: Sheet '" + sheetName + "' not found."];
+  }
+  const tillerCols = amzGetTillerColumnMap(sheet);
+  if (!tillerCols[tillerLabels.DATE]) {
+    return ["Error: Transactions sheet is missing Date column."];
+  }
+  let filterSubstr = "";
+  if (opts && opts.metadataFilterContains != null) {
+    filterSubstr = String(opts.metadataFilterContains).trim();
+  } else {
+    filterSubstr = String(importTimestampStr || "").trim();
+  }
+  return amzApplyTransactionsSortAndFilterCore_(ss, sheet, tillerCols, tillerLabels, sheetName, filterSubstr);
+}
+
+/**
+ * Sidebar troubleshooting: re-run sort + Metadata filter without re-importing.
+ * Uses a broad Metadata filter substring so any Amazon CSV import row matches.
+ * @returns {string} Log text for the sidebar
+ */
+function TestFilterSort() {
+  const lines = [];
+  lines.push("=== TestFilterSort ===");
+  const AMZ_TEST_METADATA_FILTER = "Imported by AmazonCSVImporter";
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const amzResult = getOrCreateAmzImportSheet();
+  const config = readAmzImportConfig(amzResult.sheet);
+  const err = validateAmzImportConfig(config);
+  if (err) {
+    lines.push(err);
+    return lines.join("\n");
+  }
+  const tillerLabels = config.tillerLabels;
+  const sheetName = tillerLabels.SHEET_NAME;
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    lines.push("Error: Sheet '" + sheetName + "' not found.");
+    return lines.join("\n");
+  }
+  const tillerCols = amzGetTillerColumnMap(sheet);
+  const metaCol = tillerCols[tillerLabels.METADATA];
+  if (!metaCol) {
+    lines.push(
+      "Error: Metadata column not found (Table 4 label: \"" + String(tillerLabels.METADATA) + "\")."
+    );
+    return lines.join("\n");
+  }
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    lines.push("No transaction rows below the header.");
+    lines.push("Running sort only (no Metadata filter).");
+    const post = amzApplyTransactionsSortAndFilter("");
+    for (let pi = 0; pi < post.length; pi++) lines.push(post[pi]);
+    return lines.join("\n");
+  }
+  lines.push("Metadata filter (test): text contains \"" + AMZ_TEST_METADATA_FILTER + "\"");
+  const post = amzApplyTransactionsSortAndFilter("", { metadataFilterContains: AMZ_TEST_METADATA_FILTER });
+  for (let pi = 0; pi < post.length; pi++) lines.push(post[pi]);
+  return lines.join("\n");
+}
+
+/** First 4-digit token (e.g. card last-4) in a payment method string. */
+function amzFindFirstFourDigitInString(s) {
+  const m = String(s == null ? "" : s).match(/\b(\d{4})\b/);
+  return m ? m[1] : null;
+}
+
+/**
+ * @returns {Array<{ uniqueId: string, accountId: string, account: string, accountNumber: string, institution: string }>}
+ */
+function amzReadAccountsForLookup() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(AMZ_ACCOUNTS_SHEET_NAME);
+  if (!sh) return [];
+  const data = sh.getDataRange().getValues();
+  const rows = [];
+  for (let r = 1; r < data.length; r++) {
+    const f = data[r][AMZ_ACCOUNTS_COL_UNIQUE_ID - 1];
+    if (f == null || String(f).trim() === "") continue;
+    rows.push({
+      uniqueId: String(f).trim(),
+      accountId: data[r][AMZ_ACCOUNTS_COL_ACCOUNT_ID_FIELD - 1] != null ? String(data[r][AMZ_ACCOUNTS_COL_ACCOUNT_ID_FIELD - 1]).trim() : "",
+      account: data[r][AMZ_ACCOUNTS_COL_ACCOUNT - 1] != null ? String(data[r][AMZ_ACCOUNTS_COL_ACCOUNT - 1]).trim() : "",
+      accountNumber: data[r][AMZ_ACCOUNTS_COL_ACCOUNT_NUMBER - 1] != null ? String(data[r][AMZ_ACCOUNTS_COL_ACCOUNT_NUMBER - 1]).trim() : "",
+      institution: data[r][AMZ_ACCOUNTS_COL_INSTITUTION - 1] != null ? String(data[r][AMZ_ACCOUNTS_COL_INSTITUTION - 1]).trim() : ""
+    });
+  }
+  return rows;
+}
+
+function amzFindAccountRowByFourDigits(accounts, fourDigit) {
+  if (!fourDigit) return null;
+  for (let i = 0; i < accounts.length; i++) {
+    if (accounts[i].uniqueId.indexOf(fourDigit) >= 0) {
+      return accounts[i];
+    }
+  }
+  return null;
+}
+
+/**
+ * Finds a payment row from AMZ Import Table 1 by exact or case-insensitive Payment Type match.
+ */
+function amzLookupPaymentAccountRow(paymentAccounts, paymentTypeFromCsv) {
+  const pt = amzNormalizePaymentTypeKey(paymentTypeFromCsv);
+  if (!pt || !paymentAccounts) return null;
+  if (Object.prototype.hasOwnProperty.call(paymentAccounts, pt)) return paymentAccounts[pt];
+  const lower = pt.toLowerCase();
+  const keys = Object.keys(paymentAccounts);
+  for (let i = 0; i < keys.length; i++) {
+    if (amzNormalizePaymentTypeKey(keys[i]).toLowerCase() === lower) return paymentAccounts[keys[i]];
+  }
+  return null;
+}
+
+function amzPaymentTypeHasRow(paymentAccounts, paymentTypeFromCsv) {
+  return amzLookupPaymentAccountRow(paymentAccounts, paymentTypeFromCsv) != null;
+}
+
+/** Category names from Categories sheet column A (header row 1 = "Category"). */
+function amzGetCategoriesListForSidebar() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(AMZ_CATEGORIES_SHEET_NAME);
+  if (!sh) return [];
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2) return [];
+  const vals = sh.getRange(2, 1, lastRow, 1).getValues();
+  const out = [];
+  for (let i = 0; i < vals.length; i++) {
+    const c = vals[i][0];
+    if (c != null && String(c).trim() !== "") out.push(String(c).trim());
+  }
+  return out;
+}
+
+const AMZ_SIDEBAR_WELCOME_PROP = "AMZ_SIDEBAR_WELCOME_BANNER";
+
+/**
+ * Default cutoff (180 days ago), category list, and one-time welcome flag after AMZ Import tab is created.
+ * @returns {{ defaultCutoffIso: string, categories: string[], showAmzWelcomeBanner: boolean }}
+ */
+function getAmazonSidebarInit() {
+  const d = new Date();
+  d.setDate(d.getDate() - 180);
+  const tz = Session.getScriptTimeZone();
+  const defaultCutoffIso = Utilities.formatDate(d, tz, "yyyy-MM-dd");
+  const props = PropertiesService.getScriptProperties();
+  const showBanner = props.getProperty(AMZ_SIDEBAR_WELCOME_PROP) === "1";
+  if (showBanner) {
+    props.deleteProperty(AMZ_SIDEBAR_WELCOME_PROP);
+  }
+  return {
+    defaultCutoffIso: defaultCutoffIso,
+    categories: amzGetCategoriesListForSidebar(),
+    showAmzWelcomeBanner: showBanner
+  };
+}
+
+/**
+ * Lists payment method strings in Order History after date/Website filters; suggests Accounts matches for missing AMZ rows.
+ * @returns {string} JSON string
+ */
+function analyzePaymentMethodsForOrderHistory(csvText, cutoffDateIso, includePhysicalOrders, includeWholeFoods) {
+  const amzResult = getOrCreateAmzImportSheet();
+  const config = readAmzImportConfig(amzResult.sheet);
+  const err = validateAmzImportConfig(config);
+  if (err) {
+    return JSON.stringify({ ok: false, error: err });
+  }
+  const csv = Utilities.parseCsv(csvText);
+  if (!csv.length || !csv[0].length) {
+    return JSON.stringify({ ok: false, error: "CSV is empty." });
+  }
+  const headers = csv[0];
+  const col = {};
+  headers.forEach(function (h, i) {
+    if (h != null && String(h).trim() !== "") col[String(h).trim()] = i;
+  });
+  if (amzDetectAmazonCsvFileType(col) !== "standard") {
+    return JSON.stringify({ ok: false, error: "Expected Order History (standard) CSV for payment analysis." });
+  }
+  const headerErr = amzValidateMappedCsvHeadersPresent(col, config, false);
+  if (headerErr) {
+    return JSON.stringify({ ok: false, error: headerErr });
+  }
+
+  let cutoff = null;
+  if (cutoffDateIso) {
+    cutoff = new Date(String(cutoffDateIso) + "T12:00:00");
+    if (isNaN(cutoff.getTime())) cutoff = null;
+  }
+
+  const orderDateCol = amzGetCoreCsvColumn(config, "Order Date", false);
+  const paymentMethodColName = amzGetCoreCsvColumn(config, "Payment Method Type", false);
+  const websiteColName = amzGetCoreCsvColumn(config, "Website", false);
+  if (!orderDateCol || !paymentMethodColName || col[paymentMethodColName] === undefined) {
+    return JSON.stringify({ ok: false, error: "Missing Order Date or Payment Method Type mapping." });
+  }
+
+  const skipPanda01 = includeWholeFoods === false;
+  const skipNonPanda01 = includePhysicalOrders === false;
+
+  const paymentTypes = {};
+  for (let i = 1; i < csv.length; i++) {
+    const r = csv[i];
+    let orderDate = new Date(r[col[orderDateCol]]);
+    orderDate.setHours(0, 0, 0, 0);
+    if (cutoff && orderDate < cutoff) continue;
+
+    let isWf = false;
+    if (websiteColName && col[websiteColName] !== undefined) {
+      const wf = String(r[col[websiteColName]] || "").trim().toLowerCase();
+      isWf = wf === AMZ_WHOLE_FOODS_WEBSITE;
+    }
+    if (skipPanda01 && isWf) continue;
+    if (skipNonPanda01 && !isWf) continue;
+
+    const pt = String(r[col[paymentMethodColName]] || "").trim();
+    if (pt) paymentTypes[pt] = true;
+  }
+
+  const existing = config.paymentAccounts;
+  const accounts = amzReadAccountsForLookup();
+  const missing = [];
+  const paymentTypesList = Object.keys(paymentTypes).sort();
+  const paymentRows = [];
+  paymentTypesList.forEach(function (pt) {
+    const existingRow = amzLookupPaymentAccountRow(existing, pt);
+    if (existingRow) {
+      paymentRows.push({
+        paymentType: pt,
+        ACCOUNT: existingRow.ACCOUNT,
+        ACCOUNT_NUMBER: existingRow.ACCOUNT_NUMBER,
+        INSTITUTION: existingRow.INSTITUTION,
+        ACCOUNT_ID: existingRow.ACCOUNT_ID,
+        status: "configured"
+      });
+      return;
+    }
+    const four = amzFindFirstFourDigitInString(pt);
+    const acc = amzFindAccountRowByFourDigits(accounts, four);
+    missing.push({
+      paymentType: pt,
+      fourDigit: four,
+      suggested: acc
+        ? {
+            ACCOUNT: acc.account,
+            ACCOUNT_NUMBER: acc.accountNumber,
+            INSTITUTION: acc.institution,
+            ACCOUNT_ID: acc.accountId
+          }
+        : null
+    });
+    if (acc) {
+      paymentRows.push({
+        paymentType: pt,
+        ACCOUNT: acc.account,
+        ACCOUNT_NUMBER: acc.accountNumber,
+        INSTITUTION: acc.institution,
+        ACCOUNT_ID: acc.accountId,
+        status: "suggested"
+      });
+    } else {
+      paymentRows.push({
+        paymentType: pt,
+        ACCOUNT: "Unknown",
+        ACCOUNT_NUMBER: "Unknown",
+        INSTITUTION: "Unknown",
+        ACCOUNT_ID: "",
+        status: "unknown"
+      });
+    }
+  });
+
+  return JSON.stringify({
+    ok: true,
+    paymentTypesFound: paymentTypesList,
+    missing: missing,
+    paymentRows: paymentRows
+  });
+}
+
+/**
+ * Appends rows to AMZ Import Table 1 for suggested payment types (Use for Digital = No).
+ * @param {string} rowsJson - JSON array of { paymentType, ACCOUNT, ACCOUNT_NUMBER, INSTITUTION, ACCOUNT_ID }
+ */
+function insertSuggestedAmzPaymentRows(rowsJson) {
+  let rows;
+  try {
+    rows = JSON.parse(rowsJson);
+  } catch (e) {
+    return "Error: invalid JSON.";
+  }
+  if (!rows || !rows.length) return "Nothing to insert.";
+  try {
+    const amzResult = getOrCreateAmzImportSheet();
+    const configForDedupe = readAmzImportConfig(amzResult.sheet);
+    const have = configForDedupe.paymentAccounts || {};
+    rows = rows.filter(function (r) {
+      const pt = r.paymentType != null ? amzNormalizePaymentTypeKey(r.paymentType) : "";
+      return pt && !amzPaymentTypeHasRow(have, pt);
+    });
+    if (!rows.length) return "All suggested payment types already exist on AMZ Import.";
+    const sheet = amzResult.sheet;
+    const data = sheet.getDataRange().getValues();
+    let tableStart = -1;
+    for (let i = 0; i < data.length; i++) {
+      if (String(data[i][0]).trim() === "Payment Type") {
+        tableStart = i;
+        break;
+      }
+    }
+    if (tableStart < 0) return "Error: AMZ Import payment table not found.";
+    let lastData = tableStart;
+    for (let k = tableStart + 1; k < data.length; k++) {
+      const fc = amzNormalizePaymentTypeKey(data[k][0]);
+      if (!fc) break;
+      if (amzIsAmzPaymentTableBoundaryRow(fc)) break;
+      lastData = k;
+    }
+    const insertAfterRow = lastData + 1;
+    const numRows = rows.length;
+    const numCols = 6;
+    const out = [];
+    for (let r = 0; r < numRows; r++) {
+      const row = rows[r];
+      out.push([
+        row.paymentType != null ? String(row.paymentType) : "",
+        row.ACCOUNT != null ? String(row.ACCOUNT) : "",
+        row.ACCOUNT_NUMBER != null ? String(row.ACCOUNT_NUMBER) : "",
+        row.INSTITUTION != null ? String(row.INSTITUTION) : "",
+        row.ACCOUNT_ID != null ? String(row.ACCOUNT_ID) : "",
+        "No"
+      ]);
+    }
+    sheet.insertRowsAfter(insertAfterRow, numRows);
+    // getRange(row, column, numRows, numColumns) — third arg is row COUNT, not end row.
+    sheet.getRange(insertAfterRow + 1, 1, numRows, numCols).setValues(out);
+    SpreadsheetApp.flush();
+    return "Inserted " + numRows + " payment row(s) on the AMZ Import tab.";
+  } catch (e) {
+    return "Error: " + (e.message || String(e));
+  }
+}
+
+function amzGetWeekStartDate(date) {
   const d = new Date(date);
   const day = d.getDay();
   d.setDate(d.getDate() - day);
@@ -123,13 +813,216 @@ function getWeekStartDate(date) {
   return d;
 }
 
-function getTillerColumnMap(sheet) {
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+/** Ensure row-1 header scan spans all Tiller columns even if getLastColumn() is temporarily narrow. */
+const AMZ_TRANSACTIONS_HEADER_MIN_COLS = 40;
+
+/** Row 1 header name -> 1-based column index (local to Amazon; Quick Search has its own copy). */
+function amzGetTillerColumnMap(sheet) {
+  const headerWidth = Math.max(sheet.getLastColumn(), AMZ_TRANSACTIONS_HEADER_MIN_COLS);
+  const headers = sheet.getRange(1, 1, 1, headerWidth).getDisplayValues()[0];
   const map = {};
   headers.forEach((h, i) => {
-    if (h) map[h.trim()] = i + 1;
+    if (h === "" || h === null) return;
+    const k = String(h).trim();
+    if (!k) return;
+    // First column wins per label (left-to-right). If the same header text appeared twice,
+    // only the leftmost column is used.
+    if (map[k] !== undefined) return;
+    map[k] = i + 1;
   });
   return map;
+}
+
+/** Largest 1-based column index referenced by the Tiller label map (for row width vs setValues). */
+function amzMaxTillerColumnIndex(tillerCols) {
+  let m = 1;
+  const keys = Object.keys(tillerCols);
+  for (let i = 0; i < keys.length; i++) {
+    const c = tillerCols[keys[i]];
+    if (typeof c === "number" && !isNaN(c)) m = Math.max(m, c);
+  }
+  return m;
+}
+
+/** Width for new transaction rows: never smaller than the rightmost mapped Tiller column. */
+function amzNumColsForTransactionRows(sheet, tillerCols) {
+  return Math.max(sheet.getLastColumn(), amzMaxTillerColumnIndex(tillerCols), 1);
+}
+
+/**
+ * Same as amzNumColsForTransactionRows but never throws if getLastColumn() fails (some grids throw
+ * "coordinates outside dimensions" when the sheet column extent is inconsistent).
+ */
+function amzNumColsForTransactionRowsSafe(sheet, tillerCols) {
+  const fromMap = Math.max(amzMaxTillerColumnIndex(tillerCols), 1);
+  try {
+    const lc = sheet.getLastColumn();
+    if (lc > 0) return Math.max(fromMap, lc);
+  } catch (e) {
+    /* ignore */
+  }
+  return fromMap;
+}
+
+/**
+ * When getMaxRows/getMaxColumns report smaller than needed, nudge the grid so getRange/createFilter
+ * can address the bottom-right cell. Uses setColumnWidth/setRowHeight on that corner only (avoids
+ * resizing every row on large sheets).
+ */
+function amzEnsureSheetGridCovers(sh, lastRow, lastCol) {
+  if (!sh || lastRow < 1 || lastCol < 1) return;
+  let mr = 0;
+  let mc = 0;
+  try {
+    mr = sh.getMaxRows();
+  } catch (e) {
+    return;
+  }
+  try {
+    mc = sh.getMaxColumns();
+  } catch (e) {
+    return;
+  }
+  if (mr >= lastRow && mc >= lastCol) return;
+  const defW = 21;
+  const defH = 21;
+  try {
+    if (mc < lastCol) {
+      sh.setColumnWidth(lastCol, defW);
+    }
+    if (mr < lastRow) {
+      sh.setRowHeight(lastRow, defH);
+    }
+  } catch (e) {
+    /* ignore */
+  }
+}
+
+/** Largest 1-based column index among Table 4 fields written on each import row (not SHEET_NAME). */
+function amzMaxRequiredTillerColumn(tillerCols, tillerLabels) {
+  const keys = [
+    "DATE",
+    "DESCRIPTION",
+    "AMOUNT",
+    "TRANSACTION_ID",
+    "FULL_DESCRIPTION",
+    "DATE_ADDED",
+    "MONTH",
+    "WEEK",
+    "ACCOUNT",
+    "ACCOUNT_NUMBER",
+    "INSTITUTION",
+    "ACCOUNT_ID",
+    "METADATA"
+  ];
+  let m = 1;
+  for (let i = 0; i < keys.length; i++) {
+    const c = tillerCols[tillerLabels[keys[i]]];
+    if (typeof c === "number" && !isNaN(c)) m = Math.max(m, c);
+  }
+  return m;
+}
+
+/** Row width for setValues: sheet width, all header map columns, every required Tiller field, optional Category. */
+function amzNumColsForImportRows(sheet, tillerCols, tillerLabels, categoryColNum) {
+  const base = Math.max(
+    amzNumColsForTransactionRows(sheet, tillerCols),
+    amzMaxRequiredTillerColumn(tillerCols, tillerLabels)
+  );
+  const cat =
+    categoryColNum != null && typeof categoryColNum === "number" && !isNaN(categoryColNum) ? categoryColNum : 0;
+  return Math.max(base, cat, 1);
+}
+
+/** Log lines for sidebar: resolved Date/Month/Week indices vs numCols (diagnose blank Date when Month/Week ok). */
+function amzTransactionsColumnDebugLines(sheet, tillerCols, tillerLabels, numCols, categoryColNum) {
+  const dateCol = tillerCols[tillerLabels.DATE];
+  const monthCol = tillerCols[tillerLabels.MONTH];
+  const weekCol = tillerCols[tillerLabels.WEEK];
+  const dh = sheet.getRange(1, dateCol, 1, 1).getDisplayValues()[0][0];
+  const lines = [
+    "Server: Transactions columns — Date: " +
+      dateCol +
+      ' (header="' +
+      String(dh) +
+      '" expected "' +
+      String(tillerLabels.DATE) +
+      '") Month: ' +
+      monthCol +
+      " Week: " +
+      weekCol +
+      " numCols: " +
+      numCols +
+      " dateInRange: " +
+      (dateCol <= numCols)
+  ];
+  if (categoryColNum != null && typeof categoryColNum === "number" && !isNaN(categoryColNum)) {
+    lines.push(
+      "Server: offset Category column: " + categoryColNum + " inRange: " + (categoryColNum <= numCols)
+    );
+  }
+  return lines;
+}
+
+function amzMaxRowLength(rows) {
+  let m = 0;
+  for (let i = 0; i < rows.length; i++) {
+    m = Math.max(m, rows[i].length);
+  }
+  return m;
+}
+
+/** Pad each row to writeCols; avoids setValues dropping trailing cells when JS arrays grew past numCols. */
+function amzPadRowsToWriteCols(rows, writeCols) {
+  const out = [];
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r].slice();
+    while (row.length < writeCols) row.push("");
+    out.push(row);
+  }
+  return out;
+}
+
+function amzIsCellNonempty(v) {
+  if (v === "" || v === null) return false;
+  if (typeof v === "string" && String(v).trim() === "") return false;
+  return true;
+}
+
+/**
+ * Last row (1-based) that has a value in the given column. Scans from the bottom in chunks so a
+ * stray cell far below real data does not make imports append after row 50,000 while ~13k rows
+ * hold transactions (sheet.getLastRow() uses any column on the sheet).
+ */
+function amzGetLastRowWithValueInColumn(sheet, colNum) {
+  if (colNum === undefined || colNum < 1) return 1;
+  const sheetLast = sheet.getLastRow();
+  if (sheetLast < 2) return 1;
+  const CHUNK = 5000;
+  let end = sheetLast;
+  while (end >= 2) {
+    const start = Math.max(2, end - CHUNK + 1);
+    const numRows = end - start + 1;
+    const chunk = sheet.getRange(start, colNum, numRows, 1).getValues();
+    for (let i = chunk.length - 1; i >= 0; i--) {
+      if (amzIsCellNonempty(chunk[i][0])) {
+        return start + i;
+      }
+    }
+    end = start - 1;
+  }
+  return 1;
+}
+
+/**
+ * Last row that has a Date value — used for append position and duplicate scan extent.
+ * Date-only avoids treating a stray cell in another column (or Full Description) far below as
+ * the "end" of the sheet.
+ */
+function amzGetLastTransactionDataRow(sheet, tillerCols, tillerLabels) {
+  const dateCol = tillerCols[tillerLabels.DATE];
+  if (!dateCol) return 1;
+  return amzGetLastRowWithValueInColumn(sheet, dateCol);
 }
 
 /**
@@ -221,9 +1114,12 @@ function readAmzImportConfig(amzSheet) {
 
     if (first === "Payment Type") {
       i += 1;
-      while (i < data.length && (data[i][0] && String(data[i][0]).trim() !== "")) {
+      while (i < data.length) {
+        const fc = amzNormalizePaymentTypeKey(data[i][0]);
+        if (!fc) break;
+        if (amzIsAmzPaymentTableBoundaryRow(fc)) break;
         const r = data[i];
-        const paymentType = String(r[0]).trim();
+        const paymentType = amzNormalizePaymentTypeKey(r[0]);
         const userForDigital = r[5] != null && String(r[5]).trim().toLowerCase() === "yes";
         if (userForDigital) {
           digitalUserYesCount += 1;
@@ -335,23 +1231,26 @@ function readAmzImportConfig(amzSheet) {
  * @param {Object} col - CSV header name -> column index
  * @returns {"digital"|"standard"|null}
  */
-function detectAmazonCsvFileType(col) {
-  if (col[DIGITAL_MARKER_HEADER] !== undefined && col[DIGITAL_MARKER_HEADER] !== null) {
+function amzDetectAmazonCsvFileType(col) {
+  if (col[AMZ_DIGITAL_MARKER_HEADER] !== undefined && col[AMZ_DIGITAL_MARKER_HEADER] !== null) {
     return "digital";
   }
-  if (col[STANDARD_MARKER_HEADER] !== undefined && col[STANDARD_MARKER_HEADER] !== null) {
+  if (col[AMZ_STANDARD_MARKER_HEADER] !== undefined && col[AMZ_STANDARD_MARKER_HEADER] !== null) {
     return "standard";
   }
   return null;
 }
 
 /**
+ * Validates Table 2 core mappings: every non-empty mapped header for this file type must exist in the CSV.
+ * Table 3 metadata is not validated here: if a mapping "column" name is absent from the CSV headers,
+ * {@link amzBuildAmazonMetadataObject} uses that string as a literal (e.g. type = "purchase").
  * @param {Object} col
  * @param {{ coreMappingStandard: Object, coreMappingDigital: Object, metadataMapping: Array }} config
  * @param {boolean} isDigital
  * @returns {string|null} Error message or null if OK.
  */
-function validateMappedCsvHeadersPresent(col, config, isDigital) {
+function amzValidateMappedCsvHeadersPresent(col, config, isDigital) {
   const map = isDigital ? config.coreMappingDigital : config.coreMappingStandard;
   const other = isDigital ? config.coreMappingStandard : config.coreMappingDigital;
   const fieldNames = {};
@@ -368,21 +1267,13 @@ function validateMappedCsvHeadersPresent(col, config, isDigital) {
     }
   }
 
-  for (let m = 0; m < config.metadataMapping.length; m++) {
-    const row = config.metadataMapping[m];
-    const resolved = isDigital ? row.digitalCol : row.standardCol;
-    if (!resolved || String(resolved).trim() === "") continue;
-    if (col[resolved] === undefined || col[resolved] === null) {
-      return "Missing required CSV column for this file type: \"" + resolved + "\" (metadata key: " + row.key + "). Check AMZ Import Table 3.";
-    }
-  }
   return null;
 }
 
 /**
  * Resolves core mapping for one logical field for the current file type.
  */
-function getCoreCsvColumn(config, fieldName, isDigital) {
+function amzGetCoreCsvColumn(config, fieldName, isDigital) {
   if (isDigital) {
     const d = config.coreMappingDigital[fieldName];
     if (d != null && String(d).trim() !== "") return String(d).trim();
@@ -406,16 +1297,16 @@ function validateAmzImportConfig(config) {
   if (!config.tillerLabels || typeof config.tillerLabels !== "object") {
     return AMZ_IMPORT_INVALID_MSG;
   }
-  for (let k = 0; k < REQUIRED_TILLER_LABEL_KEYS.length; k++) {
-    const key = REQUIRED_TILLER_LABEL_KEYS[k];
+  for (let k = 0; k < AMZ_REQUIRED_TILLER_LABEL_KEYS.length; k++) {
+    const key = AMZ_REQUIRED_TILLER_LABEL_KEYS[k];
     const val = config.tillerLabels[key];
     if (val === undefined || val === null || String(val).trim() === "") {
       return AMZ_IMPORT_INVALID_MSG;
     }
   }
   if (config.legacyTwoColumnCore) {
-    for (let f = 0; f < REQUIRED_CORE_FIELDS.length; f++) {
-      const fieldName = REQUIRED_CORE_FIELDS[f];
+    for (let f = 0; f < AMZ_REQUIRED_CORE_FIELDS.length; f++) {
+      const fieldName = AMZ_REQUIRED_CORE_FIELDS[f];
       const csvCol = config.coreMappingStandard && config.coreMappingStandard[fieldName];
       if (!csvCol || String(csvCol).trim() === "") return AMZ_IMPORT_INVALID_MSG;
     }
@@ -432,23 +1323,53 @@ function validateAmzImportConfig(config) {
 }
 
 /**
+ * Resolves which CSV header name exists in col for metadata: digital column first, then standard,
+ * then (for digital) Table 2 coreMappingDigital when standardCol matches a logical field's Amazon column.
+ * @param {{ key: string, standardCol: string, digitalCol: string }} m
+ * @param {Object} col - header name -> index
+ * @param {boolean} isDigital
+ * @param {Object|null} coreMappingStandard
+ * @param {Object|null} coreMappingDigital
+ * @returns {string} Header to use for col[...] lookup (may still be missing from col)
+ */
+function amzResolveMetadataColumnName(m, col, isDigital, coreMappingStandard, coreMappingDigital) {
+  let src = isDigital ? m.digitalCol : m.standardCol;
+  if (src == null || String(src).trim() === "") {
+    src = isDigital ? m.standardCol : m.digitalCol;
+  }
+  src = src != null ? String(src).trim() : "";
+  if (!src) return "";
+  if (col[src] !== undefined && col[src] !== null) return src;
+  if (isDigital && coreMappingStandard && coreMappingDigital) {
+    const keys = Object.keys(coreMappingStandard);
+    for (let i = 0; i < keys.length; i++) {
+      const fn = keys[i];
+      const std = coreMappingStandard[fn] != null ? String(coreMappingStandard[fn]).trim() : "";
+      if (std === src) {
+        const dig = coreMappingDigital[fn] != null ? String(coreMappingDigital[fn]).trim() : "";
+        if (dig && col[dig] !== undefined && col[dig] !== null) return dig;
+      }
+    }
+  }
+  return src;
+}
+
+/**
  * Builds the metadata amazon object for one CSV row using the metadata mapping.
  * @param {Array} csvRow - CSV row (array of values)
  * @param {Object} col - Map of CSV column name -> index
  * @param {Array} metadataMapping - Array of { key, standardCol, digitalCol }
  * @param {boolean} isDigital
+ * @param {Object} [coreMappingStandard] - Table 2 Amazon column per logical field (for digital fallback)
+ * @param {Object} [coreMappingDigital] - Table 2 Digital column per logical field
  * @returns {Object}
  */
-function buildAmazonMetadataObject(csvRow, col, metadataMapping, isDigital) {
+function amzBuildAmazonMetadataObject(csvRow, col, metadataMapping, isDigital, coreMappingStandard, coreMappingDigital) {
   const numericKeys = ["quantity", "item-price", "unit-price-tax", "shipping-charge", "total-discounts", "total"];
   const obj = {};
   metadataMapping.forEach(function (m) {
     const k = m.key;
-    let src = isDigital ? m.digitalCol : m.standardCol;
-    if (src == null || String(src).trim() === "") {
-      src = isDigital ? m.standardCol : m.digitalCol;
-    }
-    src = src != null ? String(src).trim() : "";
+    const src = amzResolveMetadataColumnName(m, col, isDigital, coreMappingStandard, coreMappingDigital);
     if (!src) return;
 
     const colIndex = col[src];
@@ -473,38 +1394,107 @@ function buildAmazonMetadataObject(csvRow, col, metadataMapping, isDigital) {
 }
 
 /**
- * Opens the Amazon Orders import dialog (HTML from AmazonOrdersDialog.html).
- * Ensures the AMZ Import config sheet exists and is valid; shows message if not.
+ * For Digital Content Orders CSVs where Amazon emits multiple lines per Order ID (e.g. item + tax),
+ * merge metadata: sum any field whose mapped column is the same as totalAmountColName; otherwise use the first row.
+ * @param {Array<Array>} rows - CSV rows belonging to one Order ID
+ * @param {Object} col - header name -> column index
+ * @param {Array} metadataMapping
+ * @param {boolean} isDigital
+ * @param {string} totalAmountColName - mapped "Total Amount" / Transaction Amount header (digital = Transaction Amount)
+ * @param {Object} [coreMappingStandard]
+ * @param {Object} [coreMappingDigital]
  */
-function importAmazonCSV_LocalUpload() {
+function amzBuildAmazonMetadataObjectFromRows(
+  rows,
+  col,
+  metadataMapping,
+  isDigital,
+  totalAmountColName,
+  coreMappingStandard,
+  coreMappingDigital
+) {
+  if (!rows || rows.length === 0) return {};
+  if (rows.length === 1) {
+    return amzBuildAmazonMetadataObject(rows[0], col, metadataMapping, isDigital, coreMappingStandard, coreMappingDigital);
+  }
+  const numericKeys = ["quantity", "item-price", "unit-price-tax", "shipping-charge", "total-discounts", "total"];
+  const obj = {};
+  metadataMapping.forEach(function (m) {
+    const k = m.key;
+    const resolvedSrc = amzResolveMetadataColumnName(m, col, isDigital, coreMappingStandard, coreMappingDigital);
+    if (!resolvedSrc) return;
+
+    if (resolvedSrc === totalAmountColName) {
+      let sum = 0;
+      for (let i = 0; i < rows.length; i++) {
+        const raw = rows[i][col[resolvedSrc]];
+        if (raw !== "" && raw !== undefined && raw !== null) {
+          const v = parseFloat(raw);
+          if (!isNaN(v)) sum += v;
+        }
+      }
+      if (numericKeys.indexOf(k) >= 0) {
+        obj[k] = sum;
+      } else {
+        obj[k] = String(sum);
+      }
+    } else {
+      const part = amzBuildAmazonMetadataObject(rows[0], col, [m], isDigital, coreMappingStandard, coreMappingDigital);
+      if (part[k] !== undefined) obj[k] = part[k];
+    }
+  });
+  obj.lineItemCount = rows.length;
+  return obj;
+}
+
+/**
+ * Opens the Amazon Orders import sidebar (HTML from AmazonOrdersSidebar.html).
+ * Creates AMZ Import on first run (no popup — sidebar explains defaults and can add payment rows).
+ */
+function openAmazonOrdersSidebar() {
   const result = getOrCreateAmzImportSheet();
   if (result.wasCreated) {
-    SpreadsheetApp.getUi().alert("Please update your payment types on the AMZ Import tab before proceeding with your import.");
+    PropertiesService.getScriptProperties().setProperty(AMZ_SIDEBAR_WELCOME_PROP, "1");
   }
   const config = readAmzImportConfig(result.sheet);
   const err = validateAmzImportConfig(config);
   if (err) {
     SpreadsheetApp.getUi().alert(err);
-  } else if (config.tillerLabels && config.tillerLabels.SHEET_NAME) {
+    return;
+  }
+  if (config.tillerLabels && config.tillerLabels.SHEET_NAME) {
     const targetSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(config.tillerLabels.SHEET_NAME);
     if (targetSheet) targetSheet.activate();
   }
-  const html = HtmlService.createHtmlOutputFromFile("AmazonOrdersDialog")
-    .setWidth(600)
-    .setHeight(520);
-  SpreadsheetApp.getUi().showModalDialog(html, "Import Amazon Orders");
+  const html = HtmlService.createHtmlOutputFromFile("AmazonOrdersSidebar").setTitle("Tiller Amazon Import");
+  SpreadsheetApp.getUi().showSidebar(html);
+}
+
+/** @deprecated Use openAmazonOrdersSidebar — kept for any saved menu bindings. */
+function importAmazonCSV_LocalUpload() {
+  openAmazonOrdersSidebar();
 }
 
 /**
  * Imports Amazon CSV data into the Tiller Transactions sheet.
- * Called from AmazonOrdersDialog.html via google.script.run.importAmazonRecent(text, months).
+ * Called from HTML via google.script.run.importAmazonRecent(text, months, optionsJson).
  * @param {string} csvText - Raw CSV file content
- * @param {number|null} months - Optional months lookback; null = all rows
+ * @param {number|null} months - Optional months lookback; null = all rows (ignored if options.cutoffDateIso set)
+ * @param {string|undefined} options - Optional JSON: cutoffDateIso, offsetCategory, skipPanda01, skipNonPanda01
  * @returns {string} Newline-separated summary and timing lines for the dialog log
  */
-function importAmazonRecent(csvText, months) {
+function importAmazonRecent(csvText, months, options) {
   const t0 = Date.now();
   const timing = [];
+
+  const opts = amzParseImportAmazonOptions(options);
+  const offsetCategory =
+    opts.offsetCategory != null && String(opts.offsetCategory).trim() !== ""
+      ? String(opts.offsetCategory).trim()
+      : "";
+  const skipPanda01 = opts.skipPanda01 === true;
+  const skipNonPanda01 = opts.skipNonPanda01 === true;
+  const deferPost = opts.deferTransactionsSheetPostProcess === true;
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const amzResult = getOrCreateAmzImportSheet();
@@ -519,7 +1509,24 @@ function importAmazonRecent(csvText, months) {
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return "Error: Sheet '" + sheetName + "' not found.";
 
-  const tillerCols = getTillerColumnMap(sheet);
+  const tillerCols = amzGetTillerColumnMap(sheet);
+  if (!tillerCols[tillerLabels.METADATA]) {
+    return (
+      "Error: Transactions sheet is missing a column whose header matches the AMZ Import Table 4 label for Metadata (expected \"" +
+      String(tillerLabels.METADATA) +
+      "\")."
+    );
+  }
+  if (!tillerCols[tillerLabels.DATE]) {
+    return (
+      "Error: Transactions sheet is missing a column whose header matches the AMZ Import Table 4 label for Date (expected \"" +
+      String(tillerLabels.DATE) +
+      "\")."
+    );
+  }
+  const categoryColNum = offsetCategory
+    ? tillerCols["Category"] || tillerCols["Categories"] || null
+    : null;
 
   const tParseStart = Date.now();
   const csv = Utilities.parseCsv(csvText);
@@ -536,9 +1543,9 @@ function importAmazonRecent(csvText, months) {
     if (h != null && String(h).trim() !== "") col[String(h).trim()] = i;
   });
 
-  const fileKind = detectAmazonCsvFileType(col);
+  const fileKind = amzDetectAmazonCsvFileType(col);
   if (!fileKind) {
-    return "Could not detect file type. The CSV must include column \"" + DIGITAL_MARKER_HEADER + "\" (Digital Content Orders) or \"" + STANDARD_MARKER_HEADER + "\" (Order History).";
+    return "Could not detect file type. The CSV must include column \"" + AMZ_DIGITAL_MARKER_HEADER + "\" (Digital Content Orders) or \"" + AMZ_STANDARD_MARKER_HEADER + "\" (Order History).";
   }
   const isDigital = fileKind === "digital";
   const detectedLabel = isDigital
@@ -547,32 +1554,36 @@ function importAmazonRecent(csvText, months) {
 
   if (isDigital) {
     if (config.digitalUserYesCount === 0) {
-      return detectedLabel + "\n" + "Digital Content Orders import requires exactly one row on AMZ Import Table 1 with \"User for Digital orders?\" set to Yes.";
+      return detectedLabel + "\n" + "Digital Content Orders import requires exactly one row on AMZ Import Table 1 with \"Use for Digital orders?\" set to Yes.";
     }
     if (config.digitalUserYesCount > 1) {
-      return detectedLabel + "\n" + "Digital Content Orders import: multiple rows have \"User for Digital orders?\" set to Yes. Only one row should be Yes.";
+      return detectedLabel + "\n" + "Digital Content Orders import: multiple rows have \"Use for Digital orders?\" set to Yes. Only one row should be Yes.";
     }
     if (!config.digitalUserAccount) {
-      return detectedLabel + "\n" + "Digital Content Orders import: could not read account fields from the row with User for Digital orders? = Yes.";
+      return detectedLabel + "\n" + "Digital Content Orders import: could not read account fields from the row with Use for Digital orders? = Yes.";
     }
   }
 
-  const headerErr = validateMappedCsvHeadersPresent(col, config, isDigital);
+  const headerErr = amzValidateMappedCsvHeadersPresent(col, config, isDigital);
   if (headerErr) return detectedLabel + "\n" + headerErr;
 
   let cutoff = null;
-  if (months) {
+  if (opts.cutoffDateIso) {
+    cutoff = new Date(String(opts.cutoffDateIso) + "T12:00:00");
+    if (isNaN(cutoff.getTime())) cutoff = null;
+  } else if (months) {
     cutoff = new Date();
     cutoff.setMonth(cutoff.getMonth() - months);
   }
 
-  const lastRow = sheet.getLastRow();
+  const lastDataRow = amzGetLastTransactionDataRow(sheet, tillerCols, tillerLabels);
   const existingFullDescSet = new Set();
   const tDupStart = Date.now();
-  if (lastRow > 1) {
+  if (lastDataRow >= 2) {
     const fullDescCol = tillerCols[tillerLabels.FULL_DESCRIPTION];
     if (fullDescCol) {
-      const fullDescs = sheet.getRange(2, fullDescCol, lastRow - 1, 1).getValues();
+      const numRows = lastDataRow - 1;
+      const fullDescs = sheet.getRange(2, fullDescCol, numRows, 1).getValues();
       for (let i = 0; i < fullDescs.length; i++) {
         const val = fullDescs[i][0];
         if (val) existingFullDescSet.add(String(val));
@@ -586,12 +1597,12 @@ function importAmazonRecent(csvText, months) {
     ((tDupEnd - tDupStart) / 1000).toFixed(2) + " s"
   );
 
-  const orderDateCol = getCoreCsvColumn(config, "Order Date", isDigital);
-  const orderIdCol = getCoreCsvColumn(config, "Order ID", isDigital);
-  const productNameCol = getCoreCsvColumn(config, "Product Name", isDigital);
-  const asinCol = getCoreCsvColumn(config, "ASIN", isDigital);
-  const totalAmountCol = getCoreCsvColumn(config, "Total Amount", isDigital);
-  const paymentMethodColName = getCoreCsvColumn(config, "Payment Method Type", isDigital);
+  const orderDateCol = amzGetCoreCsvColumn(config, "Order Date", isDigital);
+  const orderIdCol = amzGetCoreCsvColumn(config, "Order ID", isDigital);
+  const productNameCol = amzGetCoreCsvColumn(config, "Product Name", isDigital);
+  const asinCol = amzGetCoreCsvColumn(config, "ASIN", isDigital);
+  const totalAmountCol = amzGetCoreCsvColumn(config, "Total Amount", isDigital);
+  const paymentMethodColName = amzGetCoreCsvColumn(config, "Payment Method Type", isDigital);
 
   if (!orderDateCol || !orderIdCol || !productNameCol || !asinCol || !totalAmountCol) {
     return "AMZ Import Table 2 is missing required core column mappings for this file type.";
@@ -600,64 +1611,74 @@ function importAmazonRecent(csvText, months) {
     return "Your CSV must include the payment column mapped for Payment Method Type. Please request a new Order History from Amazon.";
   }
 
-  const numCols = sheet.getLastColumn();
+  const numCols = amzNumColsForImportRows(sheet, tillerCols, tillerLabels, categoryColNum);
+  const colDebug = amzTransactionsColumnDebugLines(sheet, tillerCols, tillerLabels, numCols, categoryColNum);
+  for (let di = 0; di < colDebug.length; di++) timing.push(colDebug[di]);
+
+  if (csv.length > 1 && col[orderDateCol] !== undefined) {
+    const rawOd = csv[1][col[orderDateCol]];
+    const sd = new Date(rawOd);
+    sd.setHours(0, 0, 0, 0);
+    timing.push(
+      "Server: sample CSV row 1 Order Date — raw=" +
+        JSON.stringify(rawOd) +
+        " getTime=" +
+        sd.getTime() +
+        " valid=" +
+        !isNaN(sd.getTime())
+    );
+  }
+
   const output = [];
-  const totalByPaymentMethod = {};
+  /** Per Order ID: { totalAmount (negative sum), orderDate, payKey } for offset rows (one offset per order). */
+  const perOrderOffset = {};
   let duplicateCount = 0;
-  const runTimestamp = new Date();
-  const importTimestampStr = Utilities.formatDate(runTimestamp, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+  let runTimestamp = new Date();
+  let importTimestampStr = Utilities.formatDate(runTimestamp, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+  if (opts.bundleImportTimestampIso) {
+    importTimestampStr = String(opts.bundleImportTimestampIso).trim();
+    runTimestamp = amzParseImportTimestampToDate(importTimestampStr);
+  }
 
   const tLoopStart = Date.now();
-  for (let i = 1; i < csv.length; i++) {
-    const r = csv[i];
-    let orderDate = new Date(r[col[orderDateCol]]);
-    orderDate.setHours(0, 0, 0, 0);
-    if (cutoff && orderDate < cutoff) continue;
+  const csvDataRowCount = csv.length - 1;
+  let aggregatedOrderCount = 0;
 
-    const orderID = r[col[orderIdCol]];
-    const productName = r[col[productNameCol]];
-    const asin = r[col[asinCol]];
-
+  function pushOneRow(r, rowsForMeta, orderDate, orderID, productName, asin, amount, accountRow, payKey) {
+    const month = Utilities.formatDate(orderDate, Session.getScriptTimeZone(), "yyyy-MM");
+    const week = amzGetWeekStartDate(orderDate);
+    const descriptionText = (isDigital ? "[AMZD] " : "[AMZ] ") + productName;
     const expectedFullDesc =
       "Amazon Order ID " + orderID + ": " +
       productName + " (" + asin + ")";
-
-    if (existingFullDescSet.has(expectedFullDesc)) {
-      duplicateCount += 1;
-      continue;
-    }
-
-    let accountRow;
-    if (isDigital) {
-      accountRow = config.digitalUserAccount;
-    } else {
-      const paymentMethodType = String(r[col[paymentMethodColName]] || "").trim();
-      accountRow = paymentAccounts[paymentMethodType];
-      if (!accountRow) {
-        return "Payment type \"" + paymentMethodType + "\" not found. Import was stopped. Add new payment type to AMZ Import tab.";
-      }
-    }
-
-    const amount = parseFloat(r[col[totalAmountCol]]) * -1;
-    const payKey = isDigital ? "Digital" : String(r[col[paymentMethodColName]] || "").trim();
-    totalByPaymentMethod[payKey] = (totalByPaymentMethod[payKey] || 0) + amount;
-
-    const month = Utilities.formatDate(orderDate, Session.getScriptTimeZone(), "yyyy-MM");
-    const week = getWeekStartDate(orderDate);
-
-    const descriptionText = (isDigital ? "[AMZD] " : "[AMZ] ") + productName;
     const fullDesc = expectedFullDesc;
 
-    const amazonMeta = buildAmazonMetadataObject(r, col, config.metadataMapping, isDigital);
+    const amazonMeta = rowsForMeta && rowsForMeta.length > 1
+      ? amzBuildAmazonMetadataObjectFromRows(
+          rowsForMeta,
+          col,
+          config.metadataMapping,
+          isDigital,
+          totalAmountCol,
+          config.coreMappingStandard,
+          config.coreMappingDigital
+        )
+      : amzBuildAmazonMetadataObject(
+          r,
+          col,
+          config.metadataMapping,
+          isDigital,
+          config.coreMappingStandard,
+          config.coreMappingDigital
+        );
     const metadataValue = "Imported by AmazonCSVImporter on " + importTimestampStr + " " + JSON.stringify({ amazon: amazonMeta });
 
     const rowOut = new Array(numCols).fill("");
-
     rowOut[tillerCols[tillerLabels.DATE] - 1] = orderDate;
     rowOut[tillerCols[tillerLabels.DESCRIPTION] - 1] = descriptionText;
     rowOut[tillerCols[tillerLabels.FULL_DESCRIPTION] - 1] = fullDesc;
     rowOut[tillerCols[tillerLabels.AMOUNT] - 1] = amount;
-    rowOut[tillerCols[tillerLabels.TRANSACTION_ID] - 1] = generateGuid();
+    rowOut[tillerCols[tillerLabels.TRANSACTION_ID] - 1] = amzGenerateGuid();
     rowOut[tillerCols[tillerLabels.DATE_ADDED] - 1] = runTimestamp;
     rowOut[tillerCols[tillerLabels.MONTH] - 1] = month;
     rowOut[tillerCols[tillerLabels.WEEK] - 1] = week;
@@ -666,13 +1687,118 @@ function importAmazonRecent(csvText, months) {
     rowOut[tillerCols[tillerLabels.INSTITUTION] - 1] = accountRow.INSTITUTION;
     rowOut[tillerCols[tillerLabels.ACCOUNT_ID] - 1] = accountRow.ACCOUNT_ID;
     rowOut[tillerCols[tillerLabels.METADATA] - 1] = metadataValue;
-
     output.push(rowOut);
   }
+
+  if (isDigital) {
+    const groups = {};
+    for (let i = 1; i < csv.length; i++) {
+      const r = csv[i];
+      const oid = String(r[col[orderIdCol]] == null ? "" : r[col[orderIdCol]]).trim();
+      if (!oid) continue;
+      if (!groups[oid]) groups[oid] = [];
+      groups[oid].push(r);
+    }
+    const orderIds = Object.keys(groups);
+    aggregatedOrderCount = orderIds.length;
+    for (let g = 0; g < orderIds.length; g++) {
+      const rows = groups[orderIds[g]];
+      const r = rows[0];
+      let sumAmount = 0;
+      for (let j = 0; j < rows.length; j++) {
+        const v = parseFloat(rows[j][col[totalAmountCol]]);
+        if (!isNaN(v)) sumAmount += v;
+      }
+      const amount = sumAmount * -1;
+
+      let orderDate = new Date(r[col[orderDateCol]]);
+      orderDate.setHours(0, 0, 0, 0);
+      if (cutoff && orderDate < cutoff) continue;
+
+      const orderID = r[col[orderIdCol]];
+      const productName = r[col[productNameCol]];
+      const asin = r[col[asinCol]];
+
+      const expectedFullDesc =
+        "Amazon Order ID " + orderID + ": " +
+        productName + " (" + asin + ")";
+
+      if (existingFullDescSet.has(expectedFullDesc)) {
+        duplicateCount += 1;
+        continue;
+      }
+
+      const accountRow = config.digitalUserAccount;
+      const payKey = "Digital";
+      const oidKey = String(orderID == null ? "" : orderID).trim();
+      if (!perOrderOffset[oidKey]) {
+        perOrderOffset[oidKey] = {
+          totalAmount: 0,
+          orderDate: new Date(orderDate.getTime()),
+          payKey: payKey
+        };
+      }
+      perOrderOffset[oidKey].totalAmount += amount;
+
+      pushOneRow(r, rows, orderDate, orderID, productName, asin, amount, accountRow, payKey);
+    }
+  } else {
+    const websiteColName = amzGetCoreCsvColumn(config, "Website", false);
+    for (let i = 1; i < csv.length; i++) {
+      const r = csv[i];
+      let orderDate = new Date(r[col[orderDateCol]]);
+      orderDate.setHours(0, 0, 0, 0);
+      if (cutoff && orderDate < cutoff) continue;
+
+      if (websiteColName && col[websiteColName] !== undefined) {
+        const wf = String(r[col[websiteColName]] || "").trim().toLowerCase();
+        const isWf = wf === AMZ_WHOLE_FOODS_WEBSITE;
+        if (skipPanda01 && isWf) continue;
+        if (skipNonPanda01 && !isWf) continue;
+      }
+
+      const orderID = r[col[orderIdCol]];
+      const productName = r[col[productNameCol]];
+      const asin = r[col[asinCol]];
+
+      const expectedFullDesc =
+        "Amazon Order ID " + orderID + ": " +
+        productName + " (" + asin + ")";
+
+      if (existingFullDescSet.has(expectedFullDesc)) {
+        duplicateCount += 1;
+        continue;
+      }
+
+      const paymentMethodType = String(r[col[paymentMethodColName]] || "").trim();
+      const accountRow = paymentAccounts[paymentMethodType];
+      if (!accountRow) {
+        return "Payment type \"" + paymentMethodType + "\" not found. Import was stopped. Add new payment type to AMZ Import tab.";
+      }
+
+      const amount = parseFloat(r[col[totalAmountCol]]) * -1;
+      const payKey = paymentMethodType;
+      const oidKey = String(orderID == null ? "" : orderID).trim();
+      if (!perOrderOffset[oidKey]) {
+        perOrderOffset[oidKey] = {
+          totalAmount: 0,
+          orderDate: new Date(orderDate.getTime()),
+          payKey: paymentMethodType
+        };
+      } else if (perOrderOffset[oidKey].payKey !== paymentMethodType) {
+        // Unusual: same Order ID, different payment strings — keep first row's payment for account routing
+      }
+      perOrderOffset[oidKey].totalAmount += amount;
+
+      pushOneRow(r, null, orderDate, orderID, productName, asin, amount, accountRow, payKey);
+    }
+  }
+
   const tLoopEnd = Date.now();
   timing.push(
-    "Server: main loop over CSV (" + (csv.length - 1) + " data rows, " +
-    output.length + " new rows): " +
+    "Server: main loop (" + csvDataRowCount + " CSV data rows" +
+    (isDigital ? ", " + aggregatedOrderCount + " unique Order IDs after grouping" : "") +
+    ", " + output.length + " new rows): " +
     ((tLoopEnd - tLoopStart) / 1000).toFixed(2) + " s"
   );
 
@@ -684,98 +1810,100 @@ function importAmazonRecent(csvText, months) {
     return detectedLabel + "\n" + msg;
   }
 
-  const tWriteNewStart = Date.now();
-  const startRow = sheet.getLastRow() + 1;
-  sheet.getRange(startRow, 1, output.length, numCols).setValues(output);
-  const tWriteNewEnd = Date.now();
-  timing.push(
-    "Server: write new rows to sheet (" + output.length + " rows): " +
-    ((tWriteNewEnd - tWriteNewStart) / 1000).toFixed(2) + " s"
-  );
-
-  const tWriteOffsetStart = Date.now();
+  // One balancing offset per Order ID; Date/Month/Week = that order's date. Date Added = import run time.
   const offsetRows = [];
-  const offsetNow = new Date();
-  const offsetMonth = Utilities.formatDate(offsetNow, Session.getScriptTimeZone(), "yyyy-MM");
-  const offsetWeek = getWeekStartDate(offsetNow);
-  const offsetDate = new Date(offsetNow);
-  offsetDate.setHours(0, 0, 0, 0);
+  const offsetNow = runTimestamp;
   const offsetTimestampStr = Utilities.formatDate(offsetNow, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
 
-  for (const paymentMethodType in totalByPaymentMethod) {
-    const total = totalByPaymentMethod[paymentMethodType];
-    if (total === 0) continue;
+  const orderIdsForOffset = Object.keys(perOrderOffset);
+  let offsetSkippedZeroNet = 0;
+  let offsetSkippedNoAccount = 0;
+  for (let oi = 0; oi < orderIdsForOffset.length; oi++) {
+    const oidKey = orderIdsForOffset[oi];
+    const po = perOrderOffset[oidKey];
+    const total = po.totalAmount;
+    if (total === 0) {
+      offsetSkippedZeroNet += 1;
+      continue;
+    }
     const accountRow = isDigital
       ? config.digitalUserAccount
-      : paymentAccounts[paymentMethodType];
-    if (!accountRow) continue;
+      : paymentAccounts[po.payKey];
+    if (!accountRow) {
+      offsetSkippedNoAccount += 1;
+      continue;
+    }
 
-    const desc = isDigital
-      ? ("Amazon purchase offset (Digital) for " + offsetTimestampStr)
-      : ("Amazon purchase offset (" + paymentMethodType + ") for " + offsetTimestampStr);
+    const orderDateForOffset = new Date(po.orderDate.getTime());
+    orderDateForOffset.setHours(0, 0, 0, 0);
+    const offMonth = Utilities.formatDate(orderDateForOffset, Session.getScriptTimeZone(), "yyyy-MM");
+    const offWeek = amzGetWeekStartDate(orderDateForOffset);
+
+    const descShort = isDigital
+      ? "Amazon digital purchase offset; Order " + oidKey
+      : "Amazon purchase offset; Order " + oidKey;
+    const descFull = isDigital
+      ? "Amazon digital purchase offset; Order " + oidKey + " (" + offsetTimestampStr + ")"
+      : "Amazon purchase offset; Order " + oidKey + " (" + po.payKey + ") " + offsetTimestampStr;
     const offset = new Array(numCols).fill("");
-    offset[tillerCols[tillerLabels.DATE] - 1] = offsetDate;
-    offset[tillerCols[tillerLabels.DESCRIPTION] - 1] = desc;
-    offset[tillerCols[tillerLabels.FULL_DESCRIPTION] - 1] = desc;
+    offset[tillerCols[tillerLabels.DATE] - 1] = orderDateForOffset;
+    offset[tillerCols[tillerLabels.DESCRIPTION] - 1] = descShort;
+    offset[tillerCols[tillerLabels.FULL_DESCRIPTION] - 1] = descFull;
     offset[tillerCols[tillerLabels.AMOUNT] - 1] = Math.abs(total);
-    offset[tillerCols[tillerLabels.TRANSACTION_ID] - 1] = generateGuid();
+    offset[tillerCols[tillerLabels.TRANSACTION_ID] - 1] = amzGenerateGuid();
     offset[tillerCols[tillerLabels.DATE_ADDED] - 1] = offsetNow;
-    offset[tillerCols[tillerLabels.MONTH] - 1] = offsetMonth;
-    offset[tillerCols[tillerLabels.WEEK] - 1] = offsetWeek;
+    offset[tillerCols[tillerLabels.MONTH] - 1] = offMonth;
+    offset[tillerCols[tillerLabels.WEEK] - 1] = offWeek;
     offset[tillerCols[tillerLabels.ACCOUNT] - 1] = accountRow.ACCOUNT;
     offset[tillerCols[tillerLabels.ACCOUNT_NUMBER] - 1] = accountRow.ACCOUNT_NUMBER;
     offset[tillerCols[tillerLabels.INSTITUTION] - 1] = accountRow.INSTITUTION;
     offset[tillerCols[tillerLabels.ACCOUNT_ID] - 1] = accountRow.ACCOUNT_ID;
-    offset[tillerCols[tillerLabels.METADATA] - 1] = "Imported by AmazonCSVImporter on " + importTimestampStr;
+    const offsetAmazonMeta = isDigital
+      ? { id: String(oidKey), type: "digital-purchase-offset" }
+      : { id: String(oidKey), type: "purchase-offset" };
+    offset[tillerCols[tillerLabels.METADATA] - 1] =
+      "Imported by AmazonCSVImporter on " +
+      importTimestampStr +
+      " " +
+      JSON.stringify({ amazon: offsetAmazonMeta });
+    if (offsetCategory && categoryColNum) {
+      offset[categoryColNum - 1] = offsetCategory;
+    }
     offsetRows.push(offset);
   }
 
-  if (offsetRows.length > 0) {
-    const offsetStartRow = sheet.getLastRow() + 1;
-    sheet.getRange(offsetStartRow, 1, offsetRows.length, numCols).setValues(offsetRows);
+  const rowsToWrite = offsetRows.length ? output.concat(offsetRows) : output;
+  const tWriteStart = Date.now();
+  const appendAfterRow = amzGetLastTransactionDataRow(sheet, tillerCols, tillerLabels);
+  const startRow = appendAfterRow + 1;
+  const maxRowLen = amzMaxRowLength(rowsToWrite);
+  const writeCols = Math.max(numCols, maxRowLen);
+  if (writeCols > numCols) {
+    timing.push(
+      "Server: WARNING: row array width " + maxRowLen + " > numCols " + numCols + "; writing " + writeCols + " columns"
+    );
   }
-  const tWriteOffsetEnd = Date.now();
+  const padded = amzPadRowsToWriteCols(rowsToWrite, writeCols);
+  sheet.getRange(startRow, 1, padded.length, writeCols).setValues(padded);
+  SpreadsheetApp.flush();
+  const tWriteEnd = Date.now();
   timing.push(
-    "Server: write offset row(s) to sheet (" + offsetRows.length + " row(s)): " +
-    ((tWriteOffsetEnd - tWriteOffsetStart) / 1000).toFixed(2) + " s"
+    "Server: write new rows to sheet (" + output.length + " import" +
+    (offsetRows.length ? ", " + offsetRows.length + " offset" : "") +
+    ", " + padded.length + " total, " + writeCols + " cols): " +
+    ((tWriteEnd - tWriteStart) / 1000).toFixed(2) + " s"
   );
 
-  const tSortStart = Date.now();
-  const sortLastRow = sheet.getLastRow();
-  if (sortLastRow >= 2) {
-    const sortNumRows = sortLastRow - 1;
-    sheet.getRange(2, 1, sortNumRows, sheet.getLastColumn())
-      .sort({ column: tillerCols[tillerLabels.DATE], ascending: false });
-  }
-  const tSortEnd = Date.now();
-  timing.push(
-    "Server: sort sheet by Date: " +
-    ((tSortEnd - tSortStart) / 1000).toFixed(2) + " s"
-  );
-
-  const metaCol = tillerCols[tillerLabels.METADATA];
-  if (metaCol) {
-    try {
-      let filter = sheet.getFilter();
-      const lastRowNow = sheet.getLastRow();
-      const numColsNow = sheet.getLastColumn();
-      const dataRange = sheet.getRange(1, 1, lastRowNow, numColsNow);
-      if (!filter) {
-        filter = dataRange.createFilter();
-      } else {
-        const fr = filter.getRange();
-        if (fr.getNumRows() !== lastRowNow || fr.getNumColumns() !== numColsNow) {
-          filter.remove();
-          filter = dataRange.createFilter();
-        }
-      }
-      const criteria = SpreadsheetApp.newFilterCriteria()
-        .whenTextContains(importTimestampStr)
-        .build();
-      filter.setColumnFilterCriteria(metaCol, criteria);
-    } catch (e) {
-      // If filter or Metadata column fails, don't fail the import
-    }
+  if (!deferPost) {
+    const postLines = amzApplyTransactionsSortAndFilterCore_(
+      ss,
+      sheet,
+      tillerCols,
+      tillerLabels,
+      sheetName,
+      String(importTimestampStr).trim()
+    );
+    for (let pi = 0; pi < postLines.length; pi++) timing.push(postLines[pi]);
   }
 
   const tEnd = Date.now();
@@ -788,8 +1916,767 @@ function importAmazonRecent(csvText, months) {
   if (duplicateCount > 0) {
     summary += "\n" + duplicateCount + " duplicate transactions were found and were not imported.";
   }
+  if (offsetSkippedZeroNet > 0) {
+    summary +=
+      "\n" +
+      offsetSkippedZeroNet +
+      " order(s) had a net total of $0 after summing line items — no offset row (offsets only apply when net is non-zero).";
+  }
+  if (offsetSkippedNoAccount > 0) {
+    summary +=
+      "\n" +
+      offsetSkippedNoAccount +
+      " order(s) had no matching payment account for the offset — no offset row (add the payment type on AMZ Import).";
+  }
   timing.unshift(summary);
   timing.unshift(detectedLabel);
 
   return timing.join("\n");
+}
+
+/**
+ * Digital Returns.csv: ASIN, Order ID, Return Date, Transaction Amount — grouped by Order ID (sum amounts).
+ * Optional Digital Content Orders CSV joins Order ID to Payment Information for account routing; else Use-for-Digital row; else blank accounts.
+ * @param {string} options - JSON with cutoffDateIso, offsetCategory
+ * @param {string} [digitalOrdersCsv] - Optional: same-ZIP Digital Content Orders for payment lookup
+ */
+function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
+  const t0 = Date.now();
+  const timing = [];
+  const opts = amzParseImportAmazonOptions(options);
+  const offsetCategory =
+    opts.offsetCategory != null && String(opts.offsetCategory).trim() !== ""
+      ? String(opts.offsetCategory).trim()
+      : "";
+  const deferPost = opts.deferTransactionsSheetPostProcess === true;
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const amzResult = getOrCreateAmzImportSheet();
+  const config = readAmzImportConfig(amzResult.sheet);
+  const configErr = validateAmzImportConfig(config);
+  if (configErr) return configErr;
+
+  const paymentAccounts = config.paymentAccounts;
+  const paymentByOrder =
+    digitalOrdersCsv != null && String(digitalOrdersCsv).trim() !== ""
+      ? amzOrderIdToPaymentStringMapFromCsv(digitalOrdersCsv, config, true)
+      : {};
+
+  const tillerLabels = config.tillerLabels;
+  const sheetName = tillerLabels.SHEET_NAME;
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return "Error: Sheet '" + sheetName + "' not found.";
+
+  const tillerCols = amzGetTillerColumnMap(sheet);
+  if (!tillerCols[tillerLabels.DATE]) {
+    return (
+      "Error: Transactions sheet is missing a column whose header matches the AMZ Import Table 4 label for Date (expected \"" +
+      String(tillerLabels.DATE) +
+      "\")."
+    );
+  }
+  const categoryColNum = offsetCategory
+    ? tillerCols["Category"] || tillerCols["Categories"] || null
+    : null;
+
+  const csv = Utilities.parseCsv(csvText);
+  if (!csv.length || !csv[0].length) {
+    return "Error: Digital Returns CSV is empty.";
+  }
+  const headers = csv[0];
+  const col = {};
+  headers.forEach(function (h, i) {
+    if (h != null && String(h).trim() !== "") col[String(h).trim()] = i;
+  });
+
+  const need = ["ASIN", "Order ID", "Return Date", "Transaction Amount"];
+  for (let n = 0; n < need.length; n++) {
+    if (col[need[n]] === undefined) {
+      return "Digital Returns CSV must include columns: ASIN, Order ID, Return Date, Transaction Amount.";
+    }
+  }
+
+  let cutoff = null;
+  if (opts.cutoffDateIso) {
+    cutoff = new Date(String(opts.cutoffDateIso) + "T12:00:00");
+    if (isNaN(cutoff.getTime())) cutoff = null;
+  }
+
+  const orderIdCol = "Order ID";
+  const returnDateCol = "Return Date";
+  const asinCol = "ASIN";
+  const totalAmountCol = "Transaction Amount";
+
+  const lastDataRow = amzGetLastTransactionDataRow(sheet, tillerCols, tillerLabels);
+  const existingFullDescSet = new Set();
+  if (lastDataRow >= 2) {
+    const fullDescCol = tillerCols[tillerLabels.FULL_DESCRIPTION];
+    if (fullDescCol) {
+      const numRows = lastDataRow - 1;
+      const fullDescs = sheet.getRange(2, fullDescCol, numRows, 1).getValues();
+      for (let i = 0; i < fullDescs.length; i++) {
+        const val = fullDescs[i][0];
+        if (val) existingFullDescSet.add(String(val));
+      }
+    }
+  }
+
+  const groups = {};
+  for (let i = 1; i < csv.length; i++) {
+    const r = csv[i];
+    const oid = String(r[col[orderIdCol]] == null ? "" : r[col[orderIdCol]]).trim();
+    if (!oid) continue;
+    if (!groups[oid]) groups[oid] = [];
+    groups[oid].push(r);
+  }
+
+  const numCols = amzNumColsForImportRows(sheet, tillerCols, tillerLabels, categoryColNum);
+  const colDebug = amzTransactionsColumnDebugLines(sheet, tillerCols, tillerLabels, numCols, categoryColNum);
+  for (let di = 0; di < colDebug.length; di++) timing.push(colDebug[di]);
+
+  if (csv.length > 1 && col[returnDateCol] !== undefined) {
+    const rawRd = csv[1][col[returnDateCol]];
+    const sd = new Date(rawRd);
+    sd.setHours(0, 0, 0, 0);
+    timing.push(
+      "Server: sample CSV row 1 Return Date — raw=" +
+        JSON.stringify(rawRd) +
+        " getTime=" +
+        sd.getTime() +
+        " valid=" +
+        !isNaN(sd.getTime())
+    );
+  }
+
+  const output = [];
+  const perOrderOffset = {};
+  let runTimestamp = new Date();
+  let importTimestampStr = Utilities.formatDate(runTimestamp, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+  if (opts.bundleImportTimestampIso) {
+    importTimestampStr = String(opts.bundleImportTimestampIso).trim();
+    runTimestamp = amzParseImportTimestampToDate(importTimestampStr);
+  }
+  let duplicateCount = 0;
+  const payKey = "Digital";
+
+  const orderIds = Object.keys(groups);
+  for (let g = 0; g < orderIds.length; g++) {
+    const rows = groups[orderIds[g]];
+    const r = rows[0];
+    let sumAmount = 0;
+    for (let j = 0; j < rows.length; j++) {
+      const v = parseFloat(rows[j][col[totalAmountCol]]);
+      if (!isNaN(v)) sumAmount += v;
+    }
+    const amount = sumAmount * -1;
+
+    let orderDate = new Date(r[col[returnDateCol]]);
+    orderDate.setHours(0, 0, 0, 0);
+    if (cutoff && orderDate < cutoff) continue;
+
+    const orderID = r[col[orderIdCol]];
+    const asin = r[col[asinCol]];
+
+    const expectedFullDesc = "Amazon Digital Return Order " + orderID + ": " + String(asin || "").trim();
+    if (existingFullDescSet.has(expectedFullDesc)) {
+      duplicateCount += 1;
+      continue;
+    }
+
+    const accountRow = amzResolveDigitalReturnAccountRow(orderID, paymentByOrder, paymentAccounts, config.digitalUserAccount);
+
+    const amazonMeta = { id: String(orderID), asin: String(asin || ""), type: "digital-return" };
+    const metadataValue =
+      "Imported by AmazonCSVImporter on " + importTimestampStr + " " + JSON.stringify({ amazon: amazonMeta });
+
+    const month = Utilities.formatDate(orderDate, Session.getScriptTimeZone(), "yyyy-MM");
+    const week = amzGetWeekStartDate(orderDate);
+    const descriptionText = "[AMZD] Digital return " + String(asin || "").trim();
+    const rowOut = new Array(numCols).fill("");
+    rowOut[tillerCols[tillerLabels.DATE] - 1] = orderDate;
+    rowOut[tillerCols[tillerLabels.DESCRIPTION] - 1] = descriptionText;
+    rowOut[tillerCols[tillerLabels.FULL_DESCRIPTION] - 1] = expectedFullDesc;
+    rowOut[tillerCols[tillerLabels.AMOUNT] - 1] = amount;
+    rowOut[tillerCols[tillerLabels.TRANSACTION_ID] - 1] = amzGenerateGuid();
+    rowOut[tillerCols[tillerLabels.DATE_ADDED] - 1] = runTimestamp;
+    rowOut[tillerCols[tillerLabels.MONTH] - 1] = month;
+    rowOut[tillerCols[tillerLabels.WEEK] - 1] = week;
+    rowOut[tillerCols[tillerLabels.ACCOUNT] - 1] = accountRow.ACCOUNT;
+    rowOut[tillerCols[tillerLabels.ACCOUNT_NUMBER] - 1] = accountRow.ACCOUNT_NUMBER;
+    rowOut[tillerCols[tillerLabels.INSTITUTION] - 1] = accountRow.INSTITUTION;
+    rowOut[tillerCols[tillerLabels.ACCOUNT_ID] - 1] = accountRow.ACCOUNT_ID;
+    rowOut[tillerCols[tillerLabels.METADATA] - 1] = metadataValue;
+    output.push(rowOut);
+
+    const oidKey = String(orderID == null ? "" : orderID).trim();
+    if (!perOrderOffset[oidKey]) {
+      perOrderOffset[oidKey] = {
+        totalAmount: 0,
+        orderDate: new Date(orderDate.getTime()),
+        payKey: payKey
+      };
+    }
+    perOrderOffset[oidKey].totalAmount += amount;
+  }
+
+  if (!output.length) {
+    let msg = "Digital Returns: no new transactions";
+    if (duplicateCount > 0) msg += "\n" + duplicateCount + " duplicates skipped.";
+    return msg;
+  }
+
+  const offsetRows = [];
+  const offsetNow = runTimestamp;
+  const offsetTimestampStr = Utilities.formatDate(offsetNow, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+  const orderIdsForOffset = Object.keys(perOrderOffset);
+  for (let oi = 0; oi < orderIdsForOffset.length; oi++) {
+    const oidKey = orderIdsForOffset[oi];
+    const po = perOrderOffset[oidKey];
+    const total = po.totalAmount;
+    if (total === 0) continue;
+    const orderDateForOffset = new Date(po.orderDate.getTime());
+    orderDateForOffset.setHours(0, 0, 0, 0);
+    const offMonth = Utilities.formatDate(orderDateForOffset, Session.getScriptTimeZone(), "yyyy-MM");
+    const offWeek = amzGetWeekStartDate(orderDateForOffset);
+    const descShort = "Amazon digital return offset; Order " + oidKey;
+    const descFull = "Amazon digital return offset; Order " + oidKey + " (" + offsetTimestampStr + ")";
+    const offset = new Array(numCols).fill("");
+    offset[tillerCols[tillerLabels.DATE] - 1] = orderDateForOffset;
+    offset[tillerCols[tillerLabels.DESCRIPTION] - 1] = descShort;
+    offset[tillerCols[tillerLabels.FULL_DESCRIPTION] - 1] = descFull;
+    offset[tillerCols[tillerLabels.AMOUNT] - 1] = Math.abs(total);
+    offset[tillerCols[tillerLabels.TRANSACTION_ID] - 1] = amzGenerateGuid();
+    offset[tillerCols[tillerLabels.DATE_ADDED] - 1] = offsetNow;
+    offset[tillerCols[tillerLabels.MONTH] - 1] = offMonth;
+    offset[tillerCols[tillerLabels.WEEK] - 1] = offWeek;
+    const offsetAcct = amzResolveDigitalReturnAccountRow(oidKey, paymentByOrder, paymentAccounts, config.digitalUserAccount);
+    offset[tillerCols[tillerLabels.ACCOUNT] - 1] = offsetAcct.ACCOUNT;
+    offset[tillerCols[tillerLabels.ACCOUNT_NUMBER] - 1] = offsetAcct.ACCOUNT_NUMBER;
+    offset[tillerCols[tillerLabels.INSTITUTION] - 1] = offsetAcct.INSTITUTION;
+    offset[tillerCols[tillerLabels.ACCOUNT_ID] - 1] = offsetAcct.ACCOUNT_ID;
+    offset[tillerCols[tillerLabels.METADATA] - 1] = "Imported by AmazonCSVImporter on " + importTimestampStr;
+    if (offsetCategory && categoryColNum) {
+      offset[categoryColNum - 1] = offsetCategory;
+    }
+    offsetRows.push(offset);
+  }
+
+  const rowsToWrite = offsetRows.length ? output.concat(offsetRows) : output;
+  const appendAfterRow = amzGetLastTransactionDataRow(sheet, tillerCols, tillerLabels);
+  const startRow = appendAfterRow + 1;
+  const maxRowLen = amzMaxRowLength(rowsToWrite);
+  const writeCols = Math.max(numCols, maxRowLen);
+  if (writeCols > numCols) {
+    timing.push(
+      "Server: WARNING: row array width " + maxRowLen + " > numCols " + numCols + "; writing " + writeCols + " columns"
+    );
+  }
+  const padded = amzPadRowsToWriteCols(rowsToWrite, writeCols);
+  sheet.getRange(startRow, 1, padded.length, writeCols).setValues(padded);
+  SpreadsheetApp.flush();
+
+  if (!deferPost) {
+    const postLines = amzApplyTransactionsSortAndFilterCore_(
+      ss,
+      sheet,
+      tillerCols,
+      tillerLabels,
+      sheetName,
+      String(importTimestampStr).trim()
+    );
+    for (let pi = 0; pi < postLines.length; pi++) timing.push(postLines[pi]);
+  }
+
+  let summary = "Digital Returns: " + output.length + " transactions imported";
+  if (duplicateCount > 0) summary += "\n" + duplicateCount + " duplicates skipped.";
+  timing.push(
+    "Server: TOTAL importDigitalReturnsCsv: " + ((Date.now() - t0) / 1000).toFixed(2) + " s"
+  );
+  timing.unshift(summary);
+  return timing.join("\n");
+}
+
+/**
+ * Refund Details.csv (Order History refunds): Order ID, Refund Amount, Refund Date, Website.
+ * Website is stored in metadata / full description only — not filtered by Orders vs Whole Foods toggles.
+ * When Order History.csv is available in the same bundle, join by Order ID to resolve payment method; else account fields are left blank for manual fix.
+ * @param {string} orderHistoryCsv - Optional raw Order History CSV from ZIP (for payment join)
+ */
+function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
+  const t0 = Date.now();
+  const timing = [];
+  const opts = amzParseImportAmazonOptions(options);
+  const offsetCategory =
+    opts.offsetCategory != null && String(opts.offsetCategory).trim() !== ""
+      ? String(opts.offsetCategory).trim()
+      : "";
+  const deferPost = opts.deferTransactionsSheetPostProcess === true;
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const amzResult = getOrCreateAmzImportSheet();
+  const config = readAmzImportConfig(amzResult.sheet);
+  const configErr = validateAmzImportConfig(config);
+  if (configErr) return configErr;
+
+  const paymentAccounts = config.paymentAccounts;
+  const paymentByOrder =
+    orderHistoryCsv != null && String(orderHistoryCsv).trim() !== ""
+      ? amzOrderIdToPaymentStringMapFromCsv(orderHistoryCsv, config, false)
+      : {};
+
+  const tillerLabels = config.tillerLabels;
+  const sheetName = tillerLabels.SHEET_NAME;
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return "Error: Sheet '" + sheetName + "' not found.";
+
+  const tillerCols = amzGetTillerColumnMap(sheet);
+  if (!tillerCols[tillerLabels.METADATA]) {
+    return (
+      "Error: Transactions sheet is missing a column whose header matches the AMZ Import Table 4 label for Metadata (expected \"" +
+      String(tillerLabels.METADATA) +
+      "\")."
+    );
+  }
+  if (!tillerCols[tillerLabels.DATE]) {
+    return (
+      "Error: Transactions sheet is missing a column whose header matches the AMZ Import Table 4 label for Date (expected \"" +
+      String(tillerLabels.DATE) +
+      "\")."
+    );
+  }
+  const categoryColNum = offsetCategory
+    ? tillerCols["Category"] || tillerCols["Categories"] || null
+    : null;
+
+  const csv = Utilities.parseCsv(csvText);
+  if (!csv.length || !csv[0].length) {
+    return "Error: Refund Details CSV is empty.";
+  }
+  const headers = csv[0];
+  const col = {};
+  headers.forEach(function (h, i) {
+    if (h != null && String(h).trim() !== "") col[String(h).trim()] = i;
+  });
+
+  const need = ["Order ID", "Refund Amount", "Refund Date", "Website"];
+  for (let n = 0; n < need.length; n++) {
+    if (col[need[n]] === undefined) {
+      return "Refund Details CSV must include columns: Order ID, Refund Amount, Refund Date, Website.";
+    }
+  }
+
+  let cutoff = null;
+  if (opts.cutoffDateIso) {
+    cutoff = new Date(String(opts.cutoffDateIso) + "T12:00:00");
+    if (isNaN(cutoff.getTime())) cutoff = null;
+  }
+
+  const orderIdCol = "Order ID";
+  const refundAmountCol = "Refund Amount";
+  const refundDateCol = "Refund Date";
+  const websiteCol = "Website";
+
+  const lastDataRow = amzGetLastTransactionDataRow(sheet, tillerCols, tillerLabels);
+  const existingFullDescSet = new Set();
+  if (lastDataRow >= 2) {
+    const fullDescCol = tillerCols[tillerLabels.FULL_DESCRIPTION];
+    if (fullDescCol) {
+      const numRows = lastDataRow - 1;
+      const fullDescs = sheet.getRange(2, fullDescCol, numRows, 1).getValues();
+      for (let i = 0; i < fullDescs.length; i++) {
+        const val = fullDescs[i][0];
+        if (val) existingFullDescSet.add(String(val));
+      }
+    }
+  }
+
+  const groups = {};
+  for (let i = 1; i < csv.length; i++) {
+    const r = csv[i];
+    const oid = String(r[col[orderIdCol]] == null ? "" : r[col[orderIdCol]]).trim();
+    if (!oid) continue;
+
+    // Do not apply Order History Website (Amazon.com vs Whole Foods) filters here — they are tied to
+    // the "Orders" checkbox and would drop all Amazon.com refunds when only Orders Returns is selected.
+
+    if (!groups[oid]) groups[oid] = [];
+    groups[oid].push(r);
+  }
+
+  const numCols = amzNumColsForImportRows(sheet, tillerCols, tillerLabels, categoryColNum);
+  const colDebug = amzTransactionsColumnDebugLines(sheet, tillerCols, tillerLabels, numCols, categoryColNum);
+  for (let di = 0; di < colDebug.length; di++) timing.push(colDebug[di]);
+
+  if (csv.length > 1 && col[refundDateCol] !== undefined) {
+    const rawFd = csv[1][col[refundDateCol]];
+    const sd = new Date(rawFd);
+    sd.setHours(0, 0, 0, 0);
+    timing.push(
+      "Server: sample CSV row 1 Refund Date — raw=" +
+        JSON.stringify(rawFd) +
+        " getTime=" +
+        sd.getTime() +
+        " valid=" +
+        !isNaN(sd.getTime())
+    );
+  }
+
+  const output = [];
+  const perOrderOffset = {};
+  let runTimestamp = new Date();
+  let importTimestampStr = Utilities.formatDate(runTimestamp, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+  if (opts.bundleImportTimestampIso) {
+    importTimestampStr = String(opts.bundleImportTimestampIso).trim();
+    runTimestamp = amzParseImportTimestampToDate(importTimestampStr);
+  }
+  let duplicateCount = 0;
+
+  const orderIds = Object.keys(groups);
+  for (let g = 0; g < orderIds.length; g++) {
+    const rows = groups[orderIds[g]];
+    const r = rows[0];
+    let sumRefund = 0;
+    for (let j = 0; j < rows.length; j++) {
+      const v = parseFloat(rows[j][col[refundAmountCol]]);
+      if (!isNaN(v)) sumRefund += v;
+    }
+    const amount = sumRefund;
+
+    let orderDate = new Date(r[col[refundDateCol]]);
+    if (isNaN(orderDate.getTime())) orderDate = new Date();
+    orderDate.setHours(0, 0, 0, 0);
+    if (cutoff && orderDate < cutoff) continue;
+
+    const orderID = r[col[orderIdCol]];
+    const websiteVal = String(r[col[websiteCol]] || "").trim();
+
+    const oidStr = String(orderID == null ? "" : orderID).trim();
+    const paymentHint = oidStr && paymentByOrder[oidStr] != null ? String(paymentByOrder[oidStr]).trim() : "";
+    const accountRow = amzResolvePhysicalRefundAccountRow(paymentHint, paymentAccounts);
+
+    const expectedFullDesc =
+      "Amazon Physical Refund Order " + orderID + ": " + sumRefund.toFixed(2) + " " + websiteVal;
+    if (existingFullDescSet.has(expectedFullDesc)) {
+      duplicateCount += 1;
+      continue;
+    }
+
+    const amazonMeta = {
+      orderId: String(orderID),
+      refundAmount: sumRefund,
+      refundDate: String(r[col[refundDateCol]] != null ? r[col[refundDateCol]] : ""),
+      website: websiteVal,
+      type: "refund-detail"
+    };
+    const metadataValue =
+      "Imported by AmazonCSVImporter on " + importTimestampStr + " " + JSON.stringify({ amazon: amazonMeta });
+
+    const month = Utilities.formatDate(orderDate, Session.getScriptTimeZone(), "yyyy-MM");
+    const week = amzGetWeekStartDate(orderDate);
+    const descriptionText = "[AMZ] Refund Order " + String(orderID);
+    const rowOut = new Array(numCols).fill("");
+    rowOut[tillerCols[tillerLabels.DATE] - 1] = orderDate;
+    rowOut[tillerCols[tillerLabels.DESCRIPTION] - 1] = descriptionText;
+    rowOut[tillerCols[tillerLabels.FULL_DESCRIPTION] - 1] = expectedFullDesc;
+    rowOut[tillerCols[tillerLabels.AMOUNT] - 1] = amount;
+    rowOut[tillerCols[tillerLabels.TRANSACTION_ID] - 1] = amzGenerateGuid();
+    rowOut[tillerCols[tillerLabels.DATE_ADDED] - 1] = runTimestamp;
+    rowOut[tillerCols[tillerLabels.MONTH] - 1] = month;
+    rowOut[tillerCols[tillerLabels.WEEK] - 1] = week;
+    rowOut[tillerCols[tillerLabels.ACCOUNT] - 1] = accountRow.ACCOUNT;
+    rowOut[tillerCols[tillerLabels.ACCOUNT_NUMBER] - 1] = accountRow.ACCOUNT_NUMBER;
+    rowOut[tillerCols[tillerLabels.INSTITUTION] - 1] = accountRow.INSTITUTION;
+    rowOut[tillerCols[tillerLabels.ACCOUNT_ID] - 1] = accountRow.ACCOUNT_ID;
+    rowOut[tillerCols[tillerLabels.METADATA] - 1] = metadataValue;
+    output.push(rowOut);
+
+    const oidKey = oidStr;
+    if (!perOrderOffset[oidKey]) {
+      perOrderOffset[oidKey] = {
+        totalAmount: 0,
+        orderDate: new Date(orderDate.getTime()),
+        payKey: paymentHint
+      };
+    }
+    perOrderOffset[oidKey].totalAmount += amount;
+  }
+
+  if (!output.length) {
+    let msg = "Refund Details: no new transactions";
+    if (duplicateCount > 0) msg += "\n" + duplicateCount + " duplicates skipped.";
+    return msg;
+  }
+
+  const offsetRows = [];
+  const offsetNow = runTimestamp;
+  const offsetTimestampStr = Utilities.formatDate(offsetNow, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+  const orderIdsForOffset = Object.keys(perOrderOffset);
+  for (let oi = 0; oi < orderIdsForOffset.length; oi++) {
+    const oidKey = orderIdsForOffset[oi];
+    const po = perOrderOffset[oidKey];
+    const total = po.totalAmount;
+    if (total === 0) continue;
+    const orderDateForOffset = new Date(po.orderDate.getTime());
+    orderDateForOffset.setHours(0, 0, 0, 0);
+    const offMonth = Utilities.formatDate(orderDateForOffset, Session.getScriptTimeZone(), "yyyy-MM");
+    const offWeek = amzGetWeekStartDate(orderDateForOffset);
+    const descShort = "Amazon refund offset; Order " + oidKey;
+    const descFull = "Amazon refund offset; Order " + oidKey + " (" + offsetTimestampStr + ")";
+    const offset = new Array(numCols).fill("");
+    offset[tillerCols[tillerLabels.DATE] - 1] = orderDateForOffset;
+    offset[tillerCols[tillerLabels.DESCRIPTION] - 1] = descShort;
+    offset[tillerCols[tillerLabels.FULL_DESCRIPTION] - 1] = descFull;
+    offset[tillerCols[tillerLabels.AMOUNT] - 1] = -Math.abs(total);
+    offset[tillerCols[tillerLabels.TRANSACTION_ID] - 1] = amzGenerateGuid();
+    offset[tillerCols[tillerLabels.DATE_ADDED] - 1] = offsetNow;
+    offset[tillerCols[tillerLabels.MONTH] - 1] = offMonth;
+    offset[tillerCols[tillerLabels.WEEK] - 1] = offWeek;
+    const payHint = paymentByOrder[oidKey] != null ? String(paymentByOrder[oidKey]).trim() : "";
+    const acct = amzResolvePhysicalRefundAccountRow(payHint, paymentAccounts);
+    offset[tillerCols[tillerLabels.ACCOUNT] - 1] = acct.ACCOUNT;
+    offset[tillerCols[tillerLabels.ACCOUNT_NUMBER] - 1] = acct.ACCOUNT_NUMBER;
+    offset[tillerCols[tillerLabels.INSTITUTION] - 1] = acct.INSTITUTION;
+    offset[tillerCols[tillerLabels.ACCOUNT_ID] - 1] = acct.ACCOUNT_ID;
+    offset[tillerCols[tillerLabels.METADATA] - 1] = "Imported by AmazonCSVImporter on " + importTimestampStr;
+    if (offsetCategory && categoryColNum) {
+      offset[categoryColNum - 1] = offsetCategory;
+    }
+    offsetRows.push(offset);
+  }
+
+  const rowsToWrite = offsetRows.length ? output.concat(offsetRows) : output;
+  const appendAfterRow = amzGetLastTransactionDataRow(sheet, tillerCols, tillerLabels);
+  const startRow = appendAfterRow + 1;
+  const maxRowLen = amzMaxRowLength(rowsToWrite);
+  const writeCols = Math.max(numCols, maxRowLen);
+  if (writeCols > numCols) {
+    timing.push(
+      "Server: WARNING: row array width " + maxRowLen + " > numCols " + numCols + "; writing " + writeCols + " columns"
+    );
+  }
+  const padded = amzPadRowsToWriteCols(rowsToWrite, writeCols);
+  sheet.getRange(startRow, 1, padded.length, writeCols).setValues(padded);
+  SpreadsheetApp.flush();
+
+  if (!deferPost) {
+    const postLines = amzApplyTransactionsSortAndFilterCore_(
+      ss,
+      sheet,
+      tillerCols,
+      tillerLabels,
+      sheetName,
+      String(importTimestampStr).trim()
+    );
+    for (let pi = 0; pi < postLines.length; pi++) timing.push(postLines[pi]);
+  }
+
+  let summary = "Refund Details: " + output.length + " transactions imported";
+  if (duplicateCount > 0) summary += "\n" + duplicateCount + " duplicates skipped.";
+  timing.push(
+    "Server: TOTAL importRefundDetailsCsv: " + ((Date.now() - t0) / 1000).toFixed(2) + " s"
+  );
+  timing.unshift(summary);
+  return timing.join("\n");
+}
+
+/**
+ * Shared bundle timestamp + import flags → JSON options string (defer sheet post-process).
+ * @param {Object} bundleLike - cutoffDateIso, offsetCategory, includeWholeFoods, includePhysicalOrders, bundleImportTimestampIso
+ */
+function amzImportBundleOptsStr_(bundleLike, bundleImportTimestampIso) {
+  const optsObj = {
+    cutoffDateIso: bundleLike.cutoffDateIso || "",
+    offsetCategory: bundleLike.offsetCategory || "",
+    skipPanda01: bundleLike.includeWholeFoods === false,
+    skipNonPanda01: bundleLike.includePhysicalOrders === false,
+    deferTransactionsSheetPostProcess: true,
+    bundleImportTimestampIso: bundleImportTimestampIso
+  };
+  return JSON.stringify(optsObj);
+}
+
+/**
+ * After deferred imports: flush, sort/filter Transactions for this bundle timestamp.
+ * @param {string} bundleImportTimestampIso
+ * @returns {string} log block (starts with "\n\n=== Transactions sheet ===\n") or errors
+ */
+function amzImportBundleTransactionsPostLog_(bundleImportTimestampIso) {
+  SpreadsheetApp.flush();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const amzResult = getOrCreateAmzImportSheet();
+  const config = readAmzImportConfig(amzResult.sheet);
+  const tillerLabels = config.tillerLabels;
+  const sheetName = tillerLabels.SHEET_NAME;
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    return "\n\n=== Transactions sheet ===\nError: Sheet '" + sheetName + "' not found.";
+  }
+  const tillerCols = amzGetTillerColumnMap(sheet);
+  if (!tillerCols[tillerLabels.DATE]) {
+    return "\n\n=== Transactions sheet ===\nError: Transactions sheet is missing Date column.";
+  }
+  const postLines = amzApplyTransactionsSortAndFilterCore_(
+    ss,
+    sheet,
+    tillerCols,
+    tillerLabels,
+    sheetName,
+    String(bundleImportTimestampIso).trim()
+  );
+  return "\n\n=== Transactions sheet ===\n" + postLines.join("\n");
+}
+
+/**
+ * One step of a chunked ZIP import (one RPC per step) to cap request payload size.
+ * Payload shape: step, bundleImportTimestampIso (optional; set on first chunk), cutoff/offset/include* flags,
+ * and CSV fields needed for that step only (orderHistoryCsv, digitalOrdersCsv, digitalReturnsCsv, refundDetailsCsv).
+ * @param {string} payloadJson
+ * @returns {Object} { bundleImportTimestampIso, step, log: string, didImport: boolean }
+ */
+function importAmazonBundleChunk(payloadJson) {
+  let payload;
+  try {
+    payload = JSON.parse(payloadJson);
+  } catch (e) {
+    throw new Error("Invalid import chunk payload.");
+  }
+  const step = String(payload.step || "").trim();
+  let ts = "";
+  const rawTs = payload.bundleImportTimestampIso;
+  if (rawTs != null && rawTs !== "") {
+    ts = String(rawTs).trim();
+  }
+  if (!ts) {
+    ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+  }
+  const optsStr = amzImportBundleOptsStr_(payload, ts);
+
+  if (step === "finalize") {
+    const postLog = amzImportBundleTransactionsPostLog_(ts);
+    return {
+      bundleImportTimestampIso: ts,
+      step: step,
+      log: postLog.replace(/^\n+/, ""),
+      didImport: false
+    };
+  }
+
+  let logText = "";
+  let didImport = false;
+  const runOH = payload.includePhysicalOrders || payload.includeWholeFoods;
+
+  if (step === "orderHistory") {
+    if (runOH && payload.orderHistoryCsv) {
+      didImport = true;
+      logText = "=== Order History ===\n" + importAmazonRecent(payload.orderHistoryCsv, null, optsStr);
+    } else if (runOH) {
+      logText = "=== Order History ===\n" + "(skipped: Order History.csv not found in ZIP)";
+    } else {
+      logText = "=== Order History ===\n" + "(skipped: not selected)";
+    }
+  } else if (step === "digitalOrders") {
+    if (payload.includeDigitalOrders && payload.digitalOrdersCsv) {
+      didImport = true;
+      logText = "=== Digital Content Orders ===\n" + importAmazonRecent(payload.digitalOrdersCsv, null, optsStr);
+    } else if (payload.includeDigitalOrders) {
+      logText = "=== Digital Content Orders ===\n" + "(skipped: file not in ZIP)";
+    } else {
+      logText = "=== Digital Content Orders ===\n" + "(skipped: not selected)";
+    }
+  } else if (step === "digitalReturns") {
+    if (payload.includeDigitalReturns && payload.digitalReturnsCsv) {
+      didImport = true;
+      logText =
+        "=== Digital Returns ===\n" +
+        importDigitalReturnsCsv(payload.digitalReturnsCsv, optsStr, payload.digitalOrdersCsv || null);
+    } else if (payload.includeDigitalReturns) {
+      logText = "=== Digital Returns ===\n" + "(skipped: file not in ZIP)";
+    } else {
+      logText = "=== Digital Returns ===\n" + "(skipped: not selected)";
+    }
+  } else if (step === "refundDetails") {
+    if (payload.includeRefundDetails && payload.refundDetailsCsv) {
+      didImport = true;
+      logText =
+        "=== Refund Details ===\n" +
+        importRefundDetailsCsv(payload.refundDetailsCsv, optsStr, payload.orderHistoryCsv || null);
+    } else if (payload.includeRefundDetails) {
+      logText = "=== Refund Details ===\n" + "(skipped: file not in ZIP)";
+    } else {
+      logText = "=== Refund Details ===\n" + "(skipped: not selected)";
+    }
+  } else {
+    throw new Error("Unknown import chunk step: " + step);
+  }
+
+  return {
+    bundleImportTimestampIso: ts,
+    step: step,
+    log: logText,
+    didImport: didImport
+  };
+}
+
+/**
+ * ZIP wizard: run selected pipelines with one cutoff and offset category.
+ * @param {string} bundleJson
+ */
+function importAmazonBundle(bundleJson) {
+  let bundle;
+  try {
+    bundle = JSON.parse(bundleJson);
+  } catch (e) {
+    return "Error: invalid import bundle.";
+  }
+
+  const bundleStarted = new Date();
+  const bundleImportTimestampIso = Utilities.formatDate(
+    bundleStarted,
+    Session.getScriptTimeZone(),
+    "yyyy-MM-dd HH:mm:ss"
+  );
+  const optsStr = amzImportBundleOptsStr_(bundle, bundleImportTimestampIso);
+  const sections = [];
+  let importRuns = 0;
+
+  const runOH = bundle.includePhysicalOrders || bundle.includeWholeFoods;
+  if (runOH && bundle.orderHistoryCsv) {
+    importRuns += 1;
+    sections.push("=== Order History ===\n" + importAmazonRecent(bundle.orderHistoryCsv, null, optsStr));
+  } else if (runOH) {
+    sections.push("=== Order History ===\n" + "(skipped: Order History.csv not found in ZIP)");
+  }
+
+  if (bundle.includeDigitalOrders && bundle.digitalOrdersCsv) {
+    importRuns += 1;
+    sections.push("=== Digital Content Orders ===\n" + importAmazonRecent(bundle.digitalOrdersCsv, null, optsStr));
+  } else if (bundle.includeDigitalOrders) {
+    sections.push("=== Digital Content Orders ===\n" + "(skipped: file not in ZIP)");
+  }
+
+  if (bundle.includeDigitalReturns && bundle.digitalReturnsCsv) {
+    importRuns += 1;
+    sections.push(
+      "=== Digital Returns ===\n" + importDigitalReturnsCsv(bundle.digitalReturnsCsv, optsStr, bundle.digitalOrdersCsv || null)
+    );
+  } else if (bundle.includeDigitalReturns) {
+    sections.push("=== Digital Returns ===\n" + "(skipped: file not in ZIP)");
+  }
+
+  if (bundle.includeRefundDetails && bundle.refundDetailsCsv) {
+    importRuns += 1;
+    sections.push(
+      "=== Refund Details ===\n" + importRefundDetailsCsv(bundle.refundDetailsCsv, optsStr, bundle.orderHistoryCsv || null)
+    );
+  }
+
+  if (!sections.length) {
+    return "No import steps were run. Select at least one order type and ensure the ZIP contains the matching CSV(s).";
+  }
+
+  let out = sections.join("\n\n");
+  if (importRuns > 0) {
+    out += amzImportBundleTransactionsPostLog_(bundleImportTimestampIso);
+  }
+  return out;
 }

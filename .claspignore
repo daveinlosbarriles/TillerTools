@@ -1,2 +1,1 @@
-# Only push root-level script files; do not push the Amazon CSV public repo copy
-TillerAmazonOrdersCSVImport/**
+# Root-level .gs / .html / appsscript.json only (clasp default). Add patterns here to skip files.

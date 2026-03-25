@@ -18,7 +18,7 @@
   "addOns": {
     "common": {
       "name": "Tiller Tools",
-      "logoUrl": "https://raw.githubusercontent.com/daveinlosbarriles/TillerQuickSearch/master/assets/tiller-tools-logo.png",
+      "logoUrl": "https://raw.githubusercontent.com/daveinlosbarriles/TillerTools/master/assets/tiller-tools-logo.png",
       "layoutProperties": {
         "primaryColor": "#188038",
         "secondaryColor": "#1a73e8"

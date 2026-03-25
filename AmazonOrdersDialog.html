@@ -65,9 +65,9 @@
     <label for="months">Months lookback (leave blank for all):</label>
     <input type="number" id="months" value="6">
     <span style="display:inline-block; width: 8ch;"></span>
-    <a id="helpLink" href="https://github.com/daveinlosbarriles/TillerAmazonOrdersCSVImport"
+    <a id="helpLink" href="https://github.com/daveinlosbarriles/TillerTools"
        target="_blank">
-      Amazon Orders Import Help
+      Tiller Amazon Import Help
     </a>
   </div>
   <div style="margin-top:16px; margin-bottom:10px;">
@@ -96,6 +96,7 @@
     function markComplete() {
       log("");
       log("=== Import complete ===");
+      document.getElementById('fileBtn').disabled = true;
       document.getElementById('closeBtn').style.display = 'inline-block';
     }
 
