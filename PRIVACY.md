@@ -76,7 +76,7 @@ This privacy policy may be updated from time to time. Updates will be reflected 
 
 If you have any questions about this Privacy Policy, you can contact:
 
-- **Developer:** Tiller Tools  
+- **Developer:** Tiller Tools
 - **Email:** [tillertoolsbydave@gmail.com](mailto:tillertoolsbydave@gmail.com)
 
 See also: [Terms of Service](TERMS.md).

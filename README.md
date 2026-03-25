@@ -3,11 +3,36 @@
 One GitHub repo and Apps Script project for **Tiller** (https://tiller.com/) spreadsheets:
 
 - **Tiller Quick Search** — sidebar to filter your **Transactions** sheet by date, amount, description, account, and category (basic filter + helper columns).
-- **Tiller Amazon Import** — sidebar wizard to import Amazon order CSVs from your data-export ZIP into **Transactions** (with **AMZ Import** configuration).
+- **Tiller Amazon Import** — sidebar wizard to import Amazon order CSVs from your data-export ZIP into **Transactions** (with **AMZ Import** configuration). Large exports are sent to Apps Script in **separate chunks** (one main CSV per round trip, plus a final step that sorts/filters Transactions) so big ZIPs stay reliable.
 
 Repository: [github.com/daveinlosbarriles/TillerTools](https://github.com/daveinlosbarriles/TillerTools). Use **clasp** from this folder to push everything, or copy individual files into an Apps Script project as described below.
 
 This software is produced by a Tiller user and is not affiliated with Tiller LLC.
+
+## Privacy, terms, and contact
+
+| Document | Link |
+|----------|------|
+| Privacy Policy | [PRIVACY.md](PRIVACY.md) · [on GitHub](https://github.com/daveinlosbarriles/TillerTools/blob/master/PRIVACY.md) |
+| Terms of Service | [TERMS.md](TERMS.md) · [on GitHub](https://github.com/daveinlosbarriles/TillerTools/blob/master/TERMS.md) |
+
+Questions: **tillertoolsbydave@gmail.com**
+
+## Google Workspace add-on
+
+This project is set up as a **Google Sheets Editor add-on**:
+
+- **[`appsscript.json`](appsscript.json)** — `addOns.common` (name **Tiller Tools**, `logoUrl` → logo in `assets/` via GitHub raw), Sheets host, and **`tillerToolsOnHomepage`** for the side-panel welcome card.
+- **[`Code.js`](Code.js)** — **`onInstall`** / **`onOpen`**, **`createMenu("Tiller Tools")`** with **Tiller Amazon Import** and **Tiller Quick Search** (works for sheet-bound scripts and for many add‑on installs; after install, also check **Extensions**).
+- **OAuth scopes** (declare the same on the Google Cloud **OAuth consent screen**):
+  - `https://www.googleapis.com/auth/spreadsheets.currentonly`
+  - `https://www.googleapis.com/auth/script.container.ui`
+
+Distribute via **Deploy → Test deployments** / **Google Workspace Marketplace**, link a **standard GCP project**, and add **test users** while the OAuth app is in *Testing*.
+
+## clasp notes
+
+- **[`.claspignore`](.claspignore)** — ignores a local **`TillerAmazonOrdersCSVImport/`** folder if you still have an old clone next to this repo (so it is not pushed to Apps Script).
 
 ---
 
@@ -50,7 +75,7 @@ This software is produced by a Tiller user and is not affiliated with Tiller LLC
 3. If you see a default file like `Code.gs` with some sample code, you can replace it or add new files. For **both** Quick Search and Amazon import, add at least: **Code.gs**, **QuickSearchSidebar.gs**, **QuickSearch.html**, **amazonorders.gs**, **AmazonOrdersSidebar.html** (and optionally `AmazonOrdersDialog.html`). For **Quick Search only**, you can omit the Amazon files and remove the Amazon menu line from **Code.js**.
 
    **Creating or replacing files:**
-   - **Code.gs** — Add **onInstall** (calling **onOpen**) and **onOpen** from **Code.js**, or paste the whole **Code.js** as **Code.gs**. Merge carefully if you already have an **onOpen** handler. Apps Script uses the **.gs** extension on disk.
+   - **Code.gs** — Add **onInstall** (calling **onOpen**) and **onOpen** from **Code.js**, or paste the whole **Code.js** as **Code.gs**. The file also defines **`tillerToolsOnHomepage`** for the Workspace add-on card; merge carefully if you already have an **onOpen** handler. Apps Script uses the **.gs** extension on disk.
    - **QuickSearchSidebar.gs**  
      - Click **+** → **Script**, name it `QuickSearchSidebar`, then paste the contents of **QuickSearchSidebar.js** from this repo. It will appear as **QuickSearchSidebar.gs**.
    - **QuickSearch.html**  
@@ -62,7 +87,7 @@ This software is produced by a Tiller user and is not affiliated with Tiller LLC
    **Using clasp:** Clone this repo, run `clasp login` and `clasp clone` / link your Apps Script project, then `clasp push` so all `.gs` / `.html` files and `appsscript.json` stay in sync with GitHub.
 
 5. **Permissions (first run):**  
-   The first time you use the script (e.g. reload the sheet and open **Tiller Tools** → **Quick Search**), Google will ask you to authorize the app:
+   The first time you use the script (e.g. reload the sheet and open **Tiller Tools** → **Tiller Quick Search** or **Tiller Amazon Import**), Google will ask you to authorize the app:
    - Click **Review permissions**, choose your account, then **Advanced** → **Go to [project name] (unsafe)** (this is your own script).
    - Click **Allow**.  
    This lets the script read and filter your sheet. No data is sent to anyone else.
@@ -82,12 +107,13 @@ Once this is on, you don’t need to do it again.
 
 ---
 
-### Step 3: Use Quick Search
+### Step 3: Open the tools
 
 1. Go back to your Google Sheet tab and **reload the page** (F5 or refresh).
-2. You should see **Tiller Tools** in the menu bar.
-3. Click **Tiller Tools** → **Quick Search**.  
-   The Quick Search sidebar opens on the right. Set your filters and click **Search**.
+2. Open the **Tiller Tools** menu (**top menu bar**, or **Extensions** when using an installed Workspace add-on).
+3. Choose:
+   - **Tiller Quick Search** — sidebar for filters; click **Search** when ready.
+   - **Tiller Amazon Import** — ZIP wizard; follow the steps to pick your Amazon export, categories, and import.
 
 ---
 
@@ -132,13 +158,15 @@ Your Transactions sheet must have columns that match what Tiller uses (e.g. Date
 
 | File in repo   | In Apps Script   | Purpose |
 |----------------|------------------|--------|
-| Code.js        | Code.gs          | Adds “Tiller Tools” menu (Quick Search + optional Amazon Orders Import) |
+| Code.js        | Code.gs          | `onInstall` / `onOpen`, **Tiller Tools** menu → **Tiller Amazon Import**, **Tiller Quick Search**; Card homepage `tillerToolsOnHomepage` |
 | QuickSearchSidebar.js | QuickSearchSidebar.gs | All Quick Search logic (criteria, filter, helper columns) |
 | QuickSearch.html      | QuickSearch.html  | Sidebar UI |
-| amazonorders.gs | amazonorders.gs | Amazon Orders CSV import (optional; same Apps Script project when using clasp) |
-| AmazonOrdersSidebar.html | AmazonOrdersSidebar.html | Amazon import **sidebar** wizard (ZIP, four CSV types, categories, payment hints) |
+| amazonorders.gs | amazonorders.gs | Amazon CSV import pipelines, **`importAmazonBundleChunk`**, finalize sort/filter |
+| AmazonOrdersSidebar.html | AmazonOrdersSidebar.html | Amazon import **sidebar** (ZIP, JSZip in browser, chunked `google.script.run`) |
 | AmazonOrdersDialog.html | AmazonOrdersDialog.html | Legacy modal UI (unused if menu opens the sidebar) |
-| appsscript.json       | (project config) | Script settings; usually auto-managed by Apps Script |
+| appsscript.json       | (project config) | Time zone, scopes, Sheets advanced service, **`addOns`** for Workspace listing |
+| assets/tiller-tools-logo.png | — | Add-on icon; referenced by `logoUrl` (GitHub raw URL) |
+| PRIVACY.md / TERMS.md | — | Privacy and terms (not deployed by clasp) |
 
 ### Architecture
 
@@ -152,7 +180,8 @@ All source for both tools is in **[TillerTools](https://github.com/daveinlosbarr
 
 ## Usage tips
 
-- Open **Tiller Tools** → **Quick Search**, set date range, amount, description, account, and/or category, then click **Search**.
+- **Quick Search:** **Tiller Tools** → **Tiller Quick Search**, set date range, amount, description, account, and/or category, then click **Search**.
+- **Amazon import:** **Tiller Tools** → **Tiller Amazon Import**, choose your orders ZIP, select which CSV pipelines to run, then complete payment-method review if prompted before **Import**.
 - Use **Reset All** or the **×** next to each section to clear criteria.
 - In **Description**, you can use plain text or simple **regex** (e.g. `Amazon|Walmart` for “Amazon or Walmart”). Use **` but not `** (with spaces) to require one phrase and exclude another (e.g. `gas but not chevron`). Click the **Description** label in the sidebar for examples.
 
