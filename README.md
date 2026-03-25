@@ -58,9 +58,21 @@ This is as simple as it sounds.
 
 4. **Save** the project (Ctrl+S) and give it a name (e.g. “Tiller Tools”) if prompted.
 
+### Step 1b: Project manifest (`appsscript.json`)
+
+The manifest is **not** added with **+ → Script / HTML**. It controls **time zone**, **V8 runtime**, **OAuth scopes**, the **Sheets advanced service** (Quick Search), and optional **add-on** metadata.
+
+1. In the Apps Script editor, open **Project Settings** (gear icon).
+2. Under **General settings**, enable **Show “appsscript.json” manifest file in editor** (wording may vary slightly by UI).
+3. Back in the editor file list, open **`appsscript.json`**.
+4. Replace the entire file with the contents of the repo’s [`appsscript.json`](appsscript.json) (copy/paste the whole JSON).
+5. **Save.**
+
+For **menu-only / personal** use you can delete the optional `"addOns": { ... }` block afterward to keep the manifest smaller; `Code.js` and the sidebars do not require it. Do **not** remove `oauthScopes`, `runtimeVersion`, or the `dependencies.enabledAdvancedServices` entry for **Sheets** if you use Quick Search.
+
 ### Step 2: Enable Google Sheets API (Quick Search)
 
-Quick Search uses the **Sheets API**.
+Quick Search uses the **Sheets API**. Pasting the repo `appsscript.json` already declares the **Sheets** advanced service; still confirm it is active.
 
 1. In the Apps Script editor, open **Services** (or **Advanced Google Services** in older UIs).
 2. Turn **Google Sheets API** **On**.
