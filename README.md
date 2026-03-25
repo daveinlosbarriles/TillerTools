@@ -178,8 +178,6 @@ If a payment type is missing, add a payment row with the **exact** Amazon string
 - **Category** – one or more categories, sorted by group
 - See all of your search criteria at once in the sidebar
 
-<img width="3840" height="2063" alt="Tiller Tools screenshot" src="https://github.com/user-attachments/assets/80d36566-54d4-40f0-b86d-35040a49a8e1" />
-
 ### First-time use: two new columns
 
 The first time you search, the script will add **QuickSearch** and **QuickCriteria** columns on the right side of the **Transactions** tab. You can delete them; they are recreated on the next search if missing.
