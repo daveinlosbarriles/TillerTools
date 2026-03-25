@@ -1,2 +1,6 @@
-# Paths under repo root that clasp push should not upload to Apps Script
+# Documentation (not Apps Script)
 docs/**
+
+# Legacy folder next to this repo — same globals as amazonorders.gs (duplicate const → SyntaxError)
+TillerAmazonOrdersCSVImport/**
+**/TillerAmazonOrdersCSVImport/**
