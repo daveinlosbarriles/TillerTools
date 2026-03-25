@@ -5,7 +5,7 @@ One GitHub repo and Apps Script project for **Tiller** (https://tiller.com/) spr
 - **Tiller Amazon Import** — sidebar wizard: upload Amazon’s **orders data ZIP**, map payment types on the **AMZ Import** tab, and append purchase/return rows to your **Transactions** sheet with balancing **offsets** where needed.
 - **Tiller Quick Search** — sidebar to filter **Transactions** by date, amount, description, account, and category (basic filter + helper columns).
 
-Repository: [github.com/daveinlosbarriles/TillerTools](https://github.com/daveinlosbarriles/TillerTools).
+**Single source of truth:** [github.com/daveinlosbarriles/TillerTools](https://github.com/daveinlosbarriles/TillerTools) — documentation, code, and **screenshots** for both tools live here (see [docs/screenshots/](docs/screenshots/)).
 
 This software is produced by a Tiller user and is not affiliated with Tiller LLC.
 
@@ -44,7 +44,7 @@ Questions: **tillertoolsbydave@gmail.com**
    | [`QuickSearch.html`](QuickSearch.html) | `QuickSearch` | Sidebar UI |
    | [`amazonorders.gs`](amazonorders.gs) | `amazonorders` | All Amazon CSV pipelines |
    | [`AmazonOrdersSidebar.html`](AmazonOrdersSidebar.html) | `AmazonOrdersSidebar` | Import sidebar (matches `HtmlService.createHtmlOutputFromFile("AmazonOrdersSidebar")`) |
-   | [`AmazonOrdersDialog.html`](AmazonOrdersDialog.html) | `AmazonOrdersDialog` | Optional / legacy; menu uses the sidebar |
+   | [`AmazonOrdersDialog.html`](AmazonOrdersDialog.html) | `AmazonOrdersDialog` | Optional; menu opens the sidebar |
 
    **Quick Search only:** omit the three Amazon files and remove the **Tiller Amazon Import** line from `Code.gs` (see comments in `Code.js`).
 
@@ -66,7 +66,7 @@ Quick Search uses the **Sheets API**.
 
 ### For developers (optional): clasp
 
-From a clone of this repo, `clasp login`, link or clone the Apps Script project, then `clasp push` to sync `.gs` / `.html` / `appsscript.json`. See [`.claspignore`](.claspignore) (e.g. ignores a legacy local `TillerAmazonOrdersCSVImport/` folder if present).
+From a clone of this repo, `clasp login`, link or clone the Apps Script project, then `clasp push` to sync `.gs` / `.html` / `appsscript.json`. See [`.claspignore`](.claspignore) for paths excluded from upload.
 
 **OAuth scopes** declared in [`appsscript.json`](appsscript.json) include Spreadsheets (current only) and `script.container.ui`. Match these on the Cloud **OAuth consent screen** if you publish an add-on later.
 
@@ -83,7 +83,7 @@ From a clone of this repo, `clasp login`, link or clone the Apps Script project,
 
 ## Tiller Amazon Import — how it works
 
-Detailed behavior and **AMZ Import** tables below are aligned with the original write-up in **[TillerAmazonOrdersCSVImport](https://github.com/daveinlosbarriles/TillerAmazonOrdersCSVImport/blob/main/README.md)**. That repo described a **single-CSV dialog** flow (`AmazonOrders.gs`, **Amazon Orders Import**). **This** repo merges the same ideas with **Quick Search**, a **ZIP** sidebar wizard (`amazonorders.gs`, **Tiller Amazon Import**), **chunked** server imports, and extra pipelines (**Orders returns**, **Digital returns**). For copy-from-GitHub-**Raw** tutorials and older **screenshots**, the legacy README is still the right reference.
+This project is the **ZIP** sidebar wizard (**Tiller Amazon Import**, `amazonorders.gs` + `AmazonOrdersSidebar.html`): **chunked** server imports, **Quick Search** in the same Apps Script project, and pipelines for physical orders, **Orders returns**, digital orders, and digital returns. **AMZ Import** sheet tables work the same way as in earlier single-CSV builds — only file names and UI differ.
 
 ### What this importer does
 
@@ -100,7 +100,7 @@ Use Amazon’s **privacy / data request** flow to download a ZIP of your orders 
 ### How to use it (this repo)
 
 1. Open your Tiller spreadsheet and choose **Tiller Tools** → **Tiller Amazon Import**.
-2. Pick the **ZIP**, enable the order types you want, set **Ignore orders older than** if you need a cutoff (similar intent to the legacy “months lookback”; use a date that overlaps a bit with your last import).
+2. Pick the **ZIP**, enable the order types you want, set **Ignore orders older than** if you need a cutoff (use a date that overlaps a bit with your last import).
 3. Complete **payment method** review if the wizard shows it; fix **AMZ Import** Table 1 if anything is **Unknown**.
 4. Click **Import** and leave the sidebar open until the log shows completion.
 
@@ -121,7 +121,7 @@ Not every export includes every file; the wizard lists which ones it found.
 
 ### Order History vs Digital Content Orders (CSV detection)
 
-For **Order History.csv** and **Digital Content Orders.csv**, file type is detected from the **header row** (same rules as the [legacy README](https://github.com/daveinlosbarriles/TillerAmazonOrdersCSVImport/blob/main/README.md#4-amazon-csv-columns-used)):
+For **Order History.csv** and **Digital Content Orders.csv**, file type is detected from the **header row**:
 
 - If **`Digital Order Item ID`** is present → **Digital Content Orders** (wins if both markers appear).
 - Else if **`Carrier Name & Tracking Number`** is present → **Order History** (standard).
@@ -239,15 +239,18 @@ Quick Search applies a **basic filter** so only rows where **QuickSearch** is TR
 | `QuickSearch.html` | `QuickSearch.html` | Quick Search sidebar UI |
 | `amazonorders.gs` | `amazonorders.gs` | Amazon CSV pipelines, chunked bundle + finalize |
 | `AmazonOrdersSidebar.html` | `AmazonOrdersSidebar.html` | Amazon ZIP wizard UI |
-| `AmazonOrdersDialog.html` | `AmazonOrdersDialog.html` | Legacy dialog HTML |
+| `AmazonOrdersDialog.html` | `AmazonOrdersDialog.html` | Optional HTML (sidebar is the main import UI) |
 | `appsscript.json` | project settings | Time zone, scopes, optional `addOns` block |
 | `assets/tiller-tools-logo.png` | — | Icon URL referenced for a future listing |
+| [docs/screenshots/](docs/screenshots/) | — | Images for this README (not pushed via clasp) |
 
 **Quick Search** and **Amazon import** do not call each other; they share only the menu in `Code.js`.
 
-**Source of truth:** [github.com/daveinlosbarriles/TillerTools](https://github.com/daveinlosbarriles/TillerTools).
+---
 
-**Earlier standalone importer (archived pattern):** [TillerAmazonOrdersCSVImport](https://github.com/daveinlosbarriles/TillerAmazonOrdersCSVImport) — same **AMZ Import** concepts; different file names (`AmazonOrders.gs`) and **dialog** UI.
+## Screenshots
+
+Add or replace images under **[docs/screenshots/](docs/screenshots/)** and link them from this README (or from install steps) using repo-relative paths, e.g. `docs/screenshots/amazon-import-sidebar.png`.
 
 ---
 

@@ -1,3 +1,2 @@
-# Do not upload local clone of legacy repo (if present)
-TillerAmazonOrdersCSVImport/**
-**/TillerAmazonOrdersCSVImport/**
+# Paths under repo root that clasp push should not upload to Apps Script
+docs/**
