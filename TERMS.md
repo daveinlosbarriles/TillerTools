@@ -8,7 +8,12 @@ By installing or using Tiller Tools (“the Add-on”), you agree to these Terms
 
 ## Description of Service
 
-Tiller Tools is a free Google Sheets add-on that helps users import Amazon order history data into their personal spreadsheets. The Add-on is provided as-is and may change or be discontinued at any time.
+Tiller Tools is a free Google Sheets add-on with two main features:
+
+- **Tiller Amazon Import** — imports Amazon order history (and related CSV data from your Amazon data export) into your spreadsheet for use with Tiller-style workflows.
+- **Tiller Quick Search** — provides a sidebar to filter your **Transactions** sheet by criteria such as date, amount, description, account, and category, using Google Sheets’ filter capabilities and optional helper columns managed by the Add-on.
+
+The Add-on is provided as-is and may change or be discontinued at any time.
 
 ## No Warranty
 
@@ -35,7 +40,7 @@ You are solely responsible for verifying the accuracy of any data processed by t
 
 You agree that:
 
-- You are responsible for reviewing and validating all imported data
+- You are responsible for reviewing and validating all imported data, and for confirming that Quick Search filters and visible rows match what you intend
 - You will maintain backups of your Google Sheets data
 - You use the Add-on at your own risk
 
