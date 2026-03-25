@@ -28,7 +28,7 @@ This software is produced by a Tiller user and is not affiliated with Tiller LLC
 ## Tiller Quick Search Process
 This is as simple as it sounds.  
 1. Click **Tiller Tools** / **Tiller Amazon Import**.  The QuickSearch sidebar appears.
-2. Enter in your criteria, and hit <enter> or search at any time to see filtered results.
+2. Enter in your criteria, and hit **enter** key or **Search** button at any time to see filtered results.
 3. Click on the Description link in the sidebar to see examples of more complex searches such as Amazon | Walmart NOT Costco
 
 ---
@@ -186,12 +186,6 @@ Quick Search applies a **basic filter** so only rows where **QuickSearch** is TR
 | [docs/screenshots/](docs/screenshots/) | — | Images for this README (not pushed via clasp) |
 
 **Quick Search** and **Amazon import** do not call each other; they share only the menu in `Code.js`.
-
----
-
-## Screenshots
-
-Add or replace images under **[docs/screenshots/](docs/screenshots/)** and link them from this README (or from install steps) using repo-relative paths, e.g. `docs/screenshots/amazon-import-sidebar.png`.
 
 ---
 
