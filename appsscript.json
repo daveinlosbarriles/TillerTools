@@ -9,14 +9,24 @@
       }
     ]
   },
-  "webapp": {
-    "access": "ANYONE",
-    "executeAs": "USER_ACCESSING"
-  },
   "exceptionLogging": "STACKDRIVER",
   "runtimeVersion": "V8",
   "oauthScopes": [
-    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/spreadsheets.currentonly",
     "https://www.googleapis.com/auth/script.container.ui"
-  ]
+  ],
+  "addOns": {
+    "common": {
+      "name": "Tiller Tools",
+      "logoUrl": "https://raw.githubusercontent.com/daveinlosbarriles/TillerQuickSearch/master/assets/tiller-tools-logo.png",
+      "layoutProperties": {
+        "primaryColor": "#188038",
+        "secondaryColor": "#1a73e8"
+      },
+      "homepageTrigger": {
+        "runFunction": "tillerToolsOnHomepage"
+      }
+    },
+    "sheets": {}
+  }
 }
