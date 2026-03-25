@@ -1,1 +1,3 @@
-# Root-level .gs / .html / appsscript.json only (clasp default). Add patterns here to skip files.
+# Do not upload local clone of legacy repo (if present)
+TillerAmazonOrdersCSVImport/**
+**/TillerAmazonOrdersCSVImport/**
