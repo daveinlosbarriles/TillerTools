@@ -13,7 +13,7 @@ const AMZ_DIGITAL_MARKER_HEADER = "Digital Order Item ID";
 /** Header that identifies a standard Order History CSV. */
 const AMZ_STANDARD_MARKER_HEADER = "Carrier Name & Tracking Number";
 
-/** Legacy reference (unused); Transactions column names live on AMZ Import Table 4. */
+/** Legacy reference (unused); Transactions column names live on AMZ Import Tiller labels. */
 const AMZ_TILLER_CONFIG = {
   SHEET_NAME: "Transactions",
   COLUMNS: {
@@ -45,42 +45,9 @@ const AMZ_IMPORT_DEFAULTS = {
     ["AmericanExpress - 2008", "Amex", "xxxx4004", "American Express", "636838eea1c01b00330ba247", "No"],
     ["AmericanExpress - 2008 and Gift Certificate/Card", "Amex", "xxxx4004", "American Express", "636838eea1c01b00330ba247", "No"]
   ],
-  TABLE2_INTRO: "Edit the left column only if Amazon changes the column names again in the CSV.",
-  TABLE2_HEADERS: ["Amazon CSV column name", "Digital Orders CSV column name", "Name in Code"],
-  TABLE2_ROWS: [
-    ["Order Date", "Order Date", "Order Date"],
-    ["Order ID", "Order ID", "Order ID"],
-    ["Product Name", "Product Name", "Product Name"],
-    ["Total Amount", "Transaction Amount", "Total Amount"],
-    ["ASIN", "ASIN", "ASIN"],
-    ["Payment Method Type", "Payment Information", "Payment Method Type"],
-    ["Carrier Name & Tracking Number", "", "Carrier Name & Tracking Number"],
-    ["Original Quantity", "Original Quantity", "Original Quantity"],
-    ["Purchase Order Number", "", "Purchase Order Number"],
-    ["Ship Date", "", "Ship Date"],
-    ["Shipping Charge", "", "Shipping Charge"],
-    ["Total Discounts", "", "Total Discounts"],
-    ["Unit Price", "Price", "Unit Price"],
-    ["Unit Price Tax", "Price Tax", "Unit Price Tax"],
-    ["Website", "", "Website"]
-  ],
-  TABLE3_INTRO: "Only edit left column if Amazon changes column names again in the CSV. The fields below map amazon data to the metadata field.",
-  TABLE3_HEADERS: ["Amazon CSV column name", "Digital Orders CSV column name", "Metadata field name"],
-  TABLE3_ROWS: [
-    ["Order ID", "Order ID", "id"],
-    ["Original Quantity", "Original Quantity", "quantity"],
-    ["Unit Price", "Price", "item-price"],
-    ["Unit Price Tax", "Price Tax", "unit-price-tax"],
-    ["Shipping Charge", "", "shipping-charge"],
-    ["Total Discounts", "", "total-discounts"],
-    ["Total Amount", "Transaction Amount", "total"],
-    ["Ship Date", "", "ship-date"],
-    ["Carrier Name & Tracking Number", "", "tracking"],
-    ["Payment Method Type", "Payment Information", "payment-type"],
-    ["Website", "", "site"],
-    ["Purchase Order Number", "", "purchase-order"],
-    ["purchase", "", "type"]
-  ],
+  TABLE_CSV_INTRO:
+    "Each row maps one Amazon export column. Source file = which CSV; Header = exact column title from row 1 of that file; Name in code = logical field (usually leave as-is); Metadata field name = key in the imported Metadata JSON (blank if none). Rows with Source _file_detection define which column identifies Order History vs Digital orders.",
+  TABLE_CSV_HEADERS: ["Source file", "Header", "Name in code", "Metadata field name"],
   TABLE4_TITLE: "Sheet and Column labels used from Tiller",
   TABLE4_HEADERS: ["Name in Code", "Tiller label"],
   TABLE4_ROWS: [
@@ -101,17 +68,132 @@ const AMZ_IMPORT_DEFAULTS = {
   ]
 };
 
-// Logical field names required in core mapping (Table 2) for standard Order History imports (legacy 2-column sheet).
-const AMZ_REQUIRED_CORE_FIELDS = [
-  "Order Date",
-  "Order ID",
-  "Product Name",
-  "Total Amount",
-  "ASIN",
-  "Payment Method Type"
+/** Seed data: Order History vs Digital column triples [standardHeader, digitalHeader, nameInCode] for default CSV map. */
+const AMZ_SEED_UNIFIED_OH_DO_ROWS = [
+  ["Order Date", "Order Date", "Order Date"],
+  ["Order ID", "Order ID", "Order ID"],
+  ["Product Name", "Product Name", "Product Name"],
+  ["Total Amount", "Transaction Amount", "Total Amount"],
+  ["ASIN", "ASIN", "ASIN"],
+  ["Payment Method Type", "Payment Information", "Payment Method Type"],
+  ["Carrier Name & Tracking Number", "", "Carrier Name & Tracking Number"],
+  ["Original Quantity", "Original Quantity", "Original Quantity"],
+  ["Purchase Order Number", "", "Purchase Order Number"],
+  ["Ship Date", "", "Ship Date"],
+  ["Shipping Charge", "", "Shipping Charge"],
+  ["Total Discounts", "", "Total Discounts"],
+  ["Unit Price", "Price", "Unit Price"],
+  ["Unit Price Tax", "Price Tax", "Unit Price Tax"],
+  ["Website", "", "Website"]
 ];
 
-// Required keys in Tiller labels (Table 4).
+/** Seed data: metadata keys matching OH/DO column pairs in {@link AMZ_SEED_UNIFIED_OH_DO_ROWS}. */
+const AMZ_SEED_UNIFIED_METADATA_ROWS = [
+  ["Order ID", "Order ID", "id"],
+  ["Original Quantity", "Original Quantity", "quantity"],
+  ["Unit Price", "Price", "item-price"],
+  ["Unit Price Tax", "Price Tax", "unit-price-tax"],
+  ["Shipping Charge", "", "shipping-charge"],
+  ["Total Discounts", "", "total-discounts"],
+  ["Total Amount", "Transaction Amount", "total"],
+  ["Ship Date", "", "ship-date"],
+  ["Carrier Name & Tracking Number", "", "tracking"],
+  ["Payment Method Type", "Payment Information", "payment-type"],
+  ["Website", "", "site"],
+  ["Purchase Order Number", "", "purchase-order"],
+  ["purchase", "", "type"]
+];
+
+/** Basename, lowercased, forward slashes (for Source file column). */
+function amzNormalizeCsvSourceKey_(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  const base = s.replace(/\\/g, "/").split("/").pop();
+  return String(base).trim().toLowerCase();
+}
+
+/**
+ * Canonical source keys used in code: order history.csv, digital content orders.csv, refund details.csv, digital returns.csv, _file_detection
+ */
+function amzCanonicalCsvSourceFile_(raw) {
+  const n = amzNormalizeCsvSourceKey_(raw);
+  if (!n) return "";
+  if (n === "orders history.csv" || n === "order history.csv") return "order history.csv";
+  if (n === "digital content orders.csv") return "digital content orders.csv";
+  if (n === "returns.csv" || n === "refund details.csv") return "refund details.csv";
+  if (n === "digital returns.csv") return "digital returns.csv";
+  if (n === "_file_detection" || n === "file_detection") return "_file_detection";
+  return n;
+}
+
+function amzMetadataKeyForOhDoColumns_(amazonCol, digitalCol) {
+  const a = amazonCol != null ? String(amazonCol).trim() : "";
+  const d = digitalCol != null ? String(digitalCol).trim() : "";
+  for (let i = 0; i < AMZ_SEED_UNIFIED_METADATA_ROWS.length; i++) {
+    const r = AMZ_SEED_UNIFIED_METADATA_ROWS[i];
+    const ra = r[0] != null ? String(r[0]).trim() : "";
+    const rd = r[1] != null ? String(r[1]).trim() : "";
+    const k = r[2] != null ? String(r[2]).trim() : "";
+    if (ra === a && rd === d) return k;
+  }
+  return "";
+}
+
+/**
+ * Default rows for unified Source file / Header / Name in code / Metadata table.
+ */
+function amzGetDefaultUnifiedCsvMapRows_() {
+  const OH = "Order History.csv";
+  const DO = "Digital Content Orders.csv";
+  const RD = "Refund Details.csv";
+  const DR = "Digital Returns.csv";
+  const rows = [];
+  rows.push(["_file_detection", AMZ_STANDARD_MARKER_HEADER, "standard", ""]);
+  rows.push(["_file_detection", AMZ_DIGITAL_MARKER_HEADER, "digital", ""]);
+  for (let i = 0; i < AMZ_SEED_UNIFIED_OH_DO_ROWS.length; i++) {
+    const r = AMZ_SEED_UNIFIED_OH_DO_ROWS[i];
+    const amz = r[0] != null ? String(r[0]).trim() : "";
+    const dig = r[1] != null ? String(r[1]).trim() : "";
+    const fn = r[2] != null ? String(r[2]).trim() : "";
+    if (!fn) continue;
+    const mk = amzMetadataKeyForOhDoColumns_(amz, dig);
+    if (amz) rows.push([OH, amz, fn, mk]);
+    if (dig) rows.push([DO, dig, fn, mk]);
+    if (!amz && dig) rows.push([DO, dig, fn, mk]);
+  }
+  rows.push([OH, "", "purchase", "type"]);
+  rows.push([RD, "Order ID", "Order ID", ""]);
+  rows.push([RD, "Refund Amount", "Refund Amount", ""]);
+  rows.push([RD, "Website", "Website", ""]);
+  rows.push([RD, "Refund Date", "Refund Date", ""]);
+  rows.push([RD, "Creation Date", "Creation Date", ""]);
+  rows.push(["Returns.csv", "Order ID", "Order ID", ""]);
+  rows.push(["Returns.csv", "Refund Amount", "Refund Amount", ""]);
+  rows.push(["Returns.csv", "Website", "Website", ""]);
+  rows.push(["Returns.csv", "Refund Date", "Refund Date", ""]);
+  rows.push(["Returns.csv", "Creation Date", "Creation Date", ""]);
+  rows.push([DR, "ASIN", "ASIN", ""]);
+  rows.push([DR, "Order ID", "Order ID", ""]);
+  rows.push([DR, "Return Date", "Return Date", ""]);
+  rows.push([DR, "Transaction Amount", "Transaction Amount", ""]);
+  return rows;
+}
+
+/**
+ * Header string for a logical Name in code on a given Amazon source file (unified map), or "".
+ * @param {*} config - from readAmzImportConfig
+ * @param {string} sourceCanon - e.g. refund details.csv
+ * @param {string} nameInCode - e.g. Order ID
+ */
+function amzGetSourceMapHeader(config, sourceCanon, nameInCode) {
+  if (!config || !config.csvMapBySource || !sourceCanon || !nameInCode) return "";
+  const m = config.csvMapBySource[sourceCanon];
+  if (!m) return "";
+  const h = m[nameInCode];
+  return h != null ? String(h).trim() : "";
+}
+
+// Required keys in Tiller labels section of AMZ Import.
 const AMZ_REQUIRED_TILLER_LABEL_KEYS = [
   "SHEET_NAME", "DATE", "DESCRIPTION", "AMOUNT", "TRANSACTION_ID",
   "FULL_DESCRIPTION", "DATE_ADDED", "MONTH", "WEEK", "ACCOUNT",
@@ -119,6 +201,8 @@ const AMZ_REQUIRED_TILLER_LABEL_KEYS = [
 ];
 
 const AMZ_IMPORT_INVALID_MSG = "AMZ Import configuration settings are missing or invalid. Suggest deleting that tab to load default values.";
+const AMZ_IMPORT_MISSING_CSV_MAP_MSG =
+  "AMZ Import must include the CSV column map (header row: Source file, Header, Name in code, Metadata field name). Delete the AMZ Import tab to recreate defaults.";
 
 /** Normalize payment type strings so sheet vs CSV match (NBSP, repeated spaces). */
 function amzNormalizePaymentTypeKey(s) {
@@ -129,16 +213,14 @@ function amzNormalizePaymentTypeKey(s) {
 }
 
 /**
- * True if column A marks the start of Table 2+ (not a payment type row in Table 1).
+ * True if column A marks the start of a section after the payment table (not a payment type row).
  * Without this, a missing blank row between tables makes the insert target the wrong row.
  */
 function amzIsAmzPaymentTableBoundaryRow(fcNormalized) {
   const fc = amzNormalizePaymentTypeKey(fcNormalized);
   if (!fc) return true;
-  if (fc === "Amazon CSV column name") return true;
-  if (fc === "Digital Orders CSV column name") return true;
-  if (AMZ_IMPORT_DEFAULTS.TABLE2_INTRO && fc === AMZ_IMPORT_DEFAULTS.TABLE2_INTRO) return true;
-  if (AMZ_IMPORT_DEFAULTS.TABLE3_INTRO && fc === AMZ_IMPORT_DEFAULTS.TABLE3_INTRO) return true;
+  if (fc === "Source file") return true;
+  if (AMZ_IMPORT_DEFAULTS.TABLE_CSV_INTRO && fc === AMZ_IMPORT_DEFAULTS.TABLE_CSV_INTRO) return true;
   if (AMZ_IMPORT_DEFAULTS.TABLE4_TITLE && fc === AMZ_IMPORT_DEFAULTS.TABLE4_TITLE) return true;
   if (AMZ_IMPORT_DEFAULTS.TABLE1_INTRO && fc === AMZ_IMPORT_DEFAULTS.TABLE1_INTRO) return true;
   if (fc.indexOf("Edit the left column only") === 0) return true;
@@ -253,7 +335,7 @@ function amzOrderIdToPaymentStringMapFromCsv(csvText, config, isDigital) {
   headers.forEach(function (h, i) {
     if (h != null && String(h).trim() !== "") col[String(h).trim()] = i;
   });
-  const kind = amzDetectAmazonCsvFileType(col);
+  const kind = amzDetectAmazonCsvFileType(col, config);
   if (isDigital && kind !== "digital") return map;
   if (!isDigital && kind !== "standard") return map;
   const orderIdCol = amzGetCoreCsvColumn(config, "Order ID", isDigital);
@@ -392,11 +474,12 @@ function amzParseAmazonCsvDateLoose_(raw) {
  * unparseable (e.g. "Not Applicable"), use Creation Date when present.
  * @param {Array} r - one CSV row
  * @param {Object<string, number>} col - trimmed header → column index
+ * @param {*} [config] - readAmzImportConfig; unified map may rename these columns
  * @returns {Date|null}
  */
-function amzResolveRefundDetailsOrderDate_(r, col) {
-  const refundDateCol = "Refund Date";
-  const creationDateCol = "Creation Date";
+function amzResolveRefundDetailsOrderDate_(r, col, config) {
+  const refundDateCol = amzGetSourceMapHeader(config, "refund details.csv", "Refund Date") || "Refund Date";
+  const creationDateCol = amzGetSourceMapHeader(config, "refund details.csv", "Creation Date") || "Creation Date";
   const hasRefundDate = col[refundDateCol] !== undefined;
   const hasCreationDate = col[creationDateCol] !== undefined;
   if (hasRefundDate) {
@@ -690,7 +773,7 @@ function TestFilterSort() {
   const metaCol = tillerCols[tillerLabels.METADATA];
   if (!metaCol) {
     lines.push(
-      "Error: Metadata column not found (Table 4 label: \"" + String(tillerLabels.METADATA) + "\")."
+      "Error: Metadata column not found (Tiller label: \"" + String(tillerLabels.METADATA) + "\")."
     );
     return lines.join("\n");
   }
@@ -825,7 +908,7 @@ function analyzePaymentMethodsForOrderHistory(csvText, cutoffDateIso, includePhy
   headers.forEach(function (h, i) {
     if (h != null && String(h).trim() !== "") col[String(h).trim()] = i;
   });
-  if (amzDetectAmazonCsvFileType(col) !== "standard") {
+  if (amzDetectAmazonCsvFileType(col, config) !== "standard") {
     return JSON.stringify({ ok: false, error: "Expected Orders (standard) CSV for payment analysis." });
   }
   const headerErr = amzValidateMappedCsvHeadersPresent(col, config, false);
@@ -1114,7 +1197,7 @@ function amzEnsureSheetGridCovers(sh, lastRow, lastCol) {
   }
 }
 
-/** Largest 1-based column index among Table 4 fields written on each import row (not SHEET_NAME). */
+/** Largest 1-based column index among Tiller label fields written on each import row (not SHEET_NAME). */
 function amzMaxRequiredTillerColumn(tillerCols, tillerLabels) {
   const keys = [
     "DATE",
@@ -1387,24 +1470,14 @@ function getOrCreateAmzImportSheet() {
   }
   row += 1;
 
-  sheet.getRange(row, 1).setValue(AMZ_IMPORT_DEFAULTS.TABLE2_INTRO);
+  const csvMapRows = amzGetDefaultUnifiedCsvMapRows_();
+  sheet.getRange(row, 1).setValue(AMZ_IMPORT_DEFAULTS.TABLE_CSV_INTRO);
   row += 1;
-  sheet.getRange(row, 1, 1, AMZ_IMPORT_DEFAULTS.TABLE2_HEADERS.length).setValues([AMZ_IMPORT_DEFAULTS.TABLE2_HEADERS]);
-  sheet.getRange(row, 1, 1, AMZ_IMPORT_DEFAULTS.TABLE2_HEADERS.length).setFontWeight("bold");
+  sheet.getRange(row, 1, 1, AMZ_IMPORT_DEFAULTS.TABLE_CSV_HEADERS.length).setValues([AMZ_IMPORT_DEFAULTS.TABLE_CSV_HEADERS]);
+  sheet.getRange(row, 1, 1, AMZ_IMPORT_DEFAULTS.TABLE_CSV_HEADERS.length).setFontWeight("bold");
   row += 1;
-  sheet.getRange(row, 1, AMZ_IMPORT_DEFAULTS.TABLE2_ROWS.length, AMZ_IMPORT_DEFAULTS.TABLE2_HEADERS.length)
-    .setValues(AMZ_IMPORT_DEFAULTS.TABLE2_ROWS);
-  row += AMZ_IMPORT_DEFAULTS.TABLE2_ROWS.length;
-  row += 1;
-
-  sheet.getRange(row, 1).setValue(AMZ_IMPORT_DEFAULTS.TABLE3_INTRO);
-  row += 1;
-  sheet.getRange(row, 1, 1, AMZ_IMPORT_DEFAULTS.TABLE3_HEADERS.length).setValues([AMZ_IMPORT_DEFAULTS.TABLE3_HEADERS]);
-  sheet.getRange(row, 1, 1, AMZ_IMPORT_DEFAULTS.TABLE3_HEADERS.length).setFontWeight("bold");
-  row += 1;
-  sheet.getRange(row, 1, AMZ_IMPORT_DEFAULTS.TABLE3_ROWS.length, AMZ_IMPORT_DEFAULTS.TABLE3_HEADERS.length)
-    .setValues(AMZ_IMPORT_DEFAULTS.TABLE3_ROWS);
-  row += AMZ_IMPORT_DEFAULTS.TABLE3_ROWS.length;
+  sheet.getRange(row, 1, csvMapRows.length, AMZ_IMPORT_DEFAULTS.TABLE_CSV_HEADERS.length).setValues(csvMapRows);
+  row += csvMapRows.length;
   row += 1;
 
   sheet.getRange(row, 1).setValue(AMZ_IMPORT_DEFAULTS.TABLE4_TITLE);
@@ -1428,8 +1501,10 @@ function getOrCreateAmzImportSheet() {
  *   metadataMapping: Array<{ key: string, standardCol: string, digitalCol: string }>,
  *   digitalUserAccount: Object|null,
  *   digitalUserYesCount: number,
- *   legacyTwoColumnCore: boolean,
- *   tillerLabels: Object|null
+ *   tillerLabels: Object|null,
+ *   csvMapPresent: boolean,
+ *   csvMapBySource: Object<string, Object<string, string>>,
+ *   csvDetection: { standardHeader?: string, digitalHeader?: string }|null
  * }}
  */
 function readAmzImportConfig(amzSheet) {
@@ -1440,13 +1515,83 @@ function readAmzImportConfig(amzSheet) {
   const metadataMapping = [];
   let digitalUserAccount = null;
   let digitalUserYesCount = 0;
-  let legacyTwoColumnCore = false;
   let tillerLabels = null;
+  let csvMapPresent = false;
+  /** @type {Object<string, Object<string, string>>} */
+  const csvMapBySource = {};
+  let csvDetection = null;
 
   let i = 0;
   while (i < data.length) {
     const row = data[i];
     const first = row[0] ? String(row[0]).trim() : "";
+    const second = row[1] ? String(row[1]).trim() : "";
+    const third = row[2] != null ? String(row[2]).trim() : "";
+    const fourth = row[3] != null ? String(row[3]).trim() : "";
+
+    if (first === "Source file" && second === "Header" && third === "Name in code" && fourth === "Metadata field name") {
+      csvMapPresent = true;
+      const buf = [];
+      i += 1;
+      while (i < data.length) {
+        const r = data[i];
+        const c0 = r[0] != null ? String(r[0]).trim() : "";
+        const c1 = r[1] != null ? String(r[1]).trim() : "";
+        const c2 = r[2] != null ? String(r[2]).trim() : "";
+        const c3 = r[3] != null ? String(r[3]).trim() : "";
+        if (!c0 && !c1 && !c2 && !c3) break;
+        if (c0.indexOf("Each row maps one Amazon export column") === 0) break;
+        if (c0 === "Sheet and Column labels used from Tiller") break;
+        if (c0 === "Name in Code" && String(r[1] || "").trim() === "Tiller label") break;
+        if (amzIsAmzPaymentTableBoundaryRow(c0) && c0 !== "_file_detection") break;
+        buf.push({ rawSource: c0, header: c1, nameCode: c2, meta: c3 });
+        i += 1;
+      }
+      const metaAcc = {};
+      for (let b = 0; b < buf.length; b++) {
+        const u = buf[b];
+        const canon = amzCanonicalCsvSourceFile_(u.rawSource);
+        const storeKey = canon === "returns.csv" ? "refund details.csv" : canon;
+        if (canon === "_file_detection") {
+          if (!csvDetection) csvDetection = {};
+          if (u.nameCode === "standard" && u.header) csvDetection.standardHeader = u.header;
+          if (u.nameCode === "digital" && u.header) csvDetection.digitalHeader = u.header;
+          continue;
+        }
+        if (u.header && u.nameCode) {
+          if (!csvMapBySource[storeKey]) csvMapBySource[storeKey] = {};
+          csvMapBySource[storeKey][u.nameCode] = u.header;
+        }
+        if (u.meta) {
+          if (!metaAcc[u.meta]) metaAcc[u.meta] = {};
+          const g = metaAcc[u.meta];
+          if (storeKey === "order history.csv") {
+            if (u.header) g.stdH = u.header;
+            else if (u.nameCode) g.stdLit = u.nameCode;
+          } else if (storeKey === "digital content orders.csv") {
+            if (u.header) g.digH = u.header;
+            else if (u.nameCode) g.digLit = u.nameCode;
+          }
+        }
+      }
+      for (const mk in metaAcc) {
+        const g = metaAcc[mk];
+        const std = (g.stdH || g.stdLit || "").trim();
+        const dig = (g.digH || g.digLit || "").trim();
+        if (std || dig) metadataMapping.push({ key: mk, standardCol: std, digitalCol: dig });
+      }
+      const oh = csvMapBySource["order history.csv"];
+      const dgo = csvMapBySource["digital content orders.csv"];
+      if (oh)
+        Object.keys(oh).forEach(function (k) {
+          coreMappingStandard[k] = oh[k];
+        });
+      if (dgo)
+        Object.keys(dgo).forEach(function (k) {
+          coreMappingDigital[k] = dgo[k];
+        });
+      continue;
+    }
 
     if (first === "Payment Type") {
       i += 1;
@@ -1476,66 +1621,7 @@ function readAmzImportConfig(amzSheet) {
       }
       continue;
     }
-    const second = row[1] ? String(row[1]).trim() : "";
-    const third = row[2] != null ? String(row[2]).trim() : "";
 
-    if (first === "Amazon CSV column name" && second === "Digital Orders CSV column name" && third === "Name in Code") {
-      i += 1;
-      while (i < data.length && (data[i][0] && String(data[i][0]).trim() !== "")) {
-        const r = data[i];
-        const amazonCol = r[0] != null ? String(r[0]).trim() : "";
-        const digitalCol = r[1] != null ? String(r[1]).trim() : "";
-        const fieldName = r[2] != null ? String(r[2]).trim() : "";
-        if (fieldName) {
-          if (amazonCol) coreMappingStandard[fieldName] = amazonCol;
-          if (digitalCol) coreMappingDigital[fieldName] = digitalCol;
-        }
-        i += 1;
-      }
-      continue;
-    }
-    if (first === "Amazon CSV column name" && second === "Name in Code") {
-      legacyTwoColumnCore = true;
-      i += 1;
-      while (i < data.length && (data[i][0] && String(data[i][0]).trim() !== "")) {
-        const r = data[i];
-        const csvCol = r[0] != null ? String(r[0]).trim() : "";
-        const fieldName = r[1] != null ? String(r[1]).trim() : "";
-        if (fieldName && csvCol) {
-          coreMappingStandard[fieldName] = csvCol;
-          coreMappingDigital[fieldName] = csvCol;
-        }
-        i += 1;
-      }
-      continue;
-    }
-    if (first === "Amazon CSV column name" && second === "Digital Orders CSV column name" && third === "Metadata field name") {
-      i += 1;
-      while (i < data.length && (data[i][0] && String(data[i][0]).trim() !== "")) {
-        const r = data[i];
-        const amazonCol = r[0] != null ? String(r[0]).trim() : "";
-        const digitalCol = r[1] != null ? String(r[1]).trim() : "";
-        const jsonKey = r[2] != null ? String(r[2]).trim() : "";
-        if (jsonKey) {
-          metadataMapping.push({ key: jsonKey, standardCol: amazonCol, digitalCol: digitalCol });
-        }
-        i += 1;
-      }
-      continue;
-    }
-    if (first === "Amazon CSV column name" && second === "Metadata field name") {
-      i += 1;
-      while (i < data.length && (data[i][0] && String(data[i][0]).trim() !== "")) {
-        const r = data[i];
-        const csvColOrLiteral = r[0] != null ? String(r[0]).trim() : "";
-        const jsonKey = r[1] != null ? String(r[1]).trim() : "";
-        if (jsonKey) {
-          metadataMapping.push({ key: jsonKey, standardCol: csvColOrLiteral, digitalCol: csvColOrLiteral });
-        }
-        i += 1;
-      }
-      continue;
-    }
     if (first === "Name in Code" && second === "Tiller label") {
       tillerLabels = {};
       i += 1;
@@ -1558,28 +1644,35 @@ function readAmzImportConfig(amzSheet) {
     metadataMapping,
     digitalUserAccount,
     digitalUserYesCount,
-    legacyTwoColumnCore,
-    tillerLabels
+    tillerLabels,
+    csvMapPresent: csvMapPresent,
+    csvMapBySource: csvMapBySource,
+    csvDetection: csvDetection
   };
 }
 
 /**
  * @param {Object} col - CSV header name -> column index
+ * @param {*} [config] - from readAmzImportConfig; optional.csvDetection overrides marker column names
  * @returns {"digital"|"standard"|null}
  */
-function amzDetectAmazonCsvFileType(col) {
-  if (col[AMZ_DIGITAL_MARKER_HEADER] !== undefined && col[AMZ_DIGITAL_MARKER_HEADER] !== null) {
-    return "digital";
-  }
-  if (col[AMZ_STANDARD_MARKER_HEADER] !== undefined && col[AMZ_STANDARD_MARKER_HEADER] !== null) {
-    return "standard";
-  }
+function amzDetectAmazonCsvFileType(col, config) {
+  const digH =
+    config && config.csvDetection && config.csvDetection.digitalHeader
+      ? String(config.csvDetection.digitalHeader).trim()
+      : AMZ_DIGITAL_MARKER_HEADER;
+  const stdH =
+    config && config.csvDetection && config.csvDetection.standardHeader
+      ? String(config.csvDetection.standardHeader).trim()
+      : AMZ_STANDARD_MARKER_HEADER;
+  if (col[digH] !== undefined && col[digH] !== null) return "digital";
+  if (col[stdH] !== undefined && col[stdH] !== null) return "standard";
   return null;
 }
 
 /**
- * Validates Table 2 core mappings: every non-empty mapped header for this file type must exist in the CSV.
- * Table 3 metadata is not validated here: if a mapping "column" name is absent from the CSV headers,
+ * Validates core mappings from the unified CSV map: every non-empty mapped header for this file type must exist in the CSV.
+ * Metadata mappings are not validated here: if a mapping "column" name is absent from the CSV headers,
  * {@link amzBuildAmazonMetadataObject} uses that string as a literal (e.g. type = "purchase").
  * @param {Object} col
  * @param {{ coreMappingStandard: Object, coreMappingDigital: Object, metadataMapping: Array }} config
@@ -1599,7 +1692,7 @@ function amzValidateMappedCsvHeadersPresent(col, config, isDigital) {
       : (config.coreMappingStandard[fieldName] || "");
     if (!resolved || String(resolved).trim() === "") continue;
     if (col[resolved] === undefined || col[resolved] === null) {
-      return "Missing required CSV column for this file type: \"" + resolved + "\" (logical field: " + fieldName + "). Check AMZ Import Table 2.";
+      return "Missing required CSV column for this file type: \"" + resolved + "\" (logical field: " + fieldName + "). Check AMZ Import CSV column map.";
     }
   }
 
@@ -1640,27 +1733,22 @@ function validateAmzImportConfig(config) {
       return AMZ_IMPORT_INVALID_MSG;
     }
   }
-  if (config.legacyTwoColumnCore) {
-    for (let f = 0; f < AMZ_REQUIRED_CORE_FIELDS.length; f++) {
-      const fieldName = AMZ_REQUIRED_CORE_FIELDS[f];
-      const csvCol = config.coreMappingStandard && config.coreMappingStandard[fieldName];
-      if (!csvCol || String(csvCol).trim() === "") return AMZ_IMPORT_INVALID_MSG;
-    }
-  } else {
-    const need = ["Order Date", "Order ID", "Product Name", "Total Amount", "ASIN"];
-    for (let n = 0; n < need.length; n++) {
-      const fieldName = need[n];
-      const hasStd = config.coreMappingStandard[fieldName] && String(config.coreMappingStandard[fieldName]).trim() !== "";
-      const hasDig = config.coreMappingDigital[fieldName] && String(config.coreMappingDigital[fieldName]).trim() !== "";
-      if (!hasStd && !hasDig) return AMZ_IMPORT_INVALID_MSG;
-    }
+  if (config.csvMapPresent !== true) {
+    return AMZ_IMPORT_MISSING_CSV_MAP_MSG;
+  }
+  const need = ["Order Date", "Order ID", "Product Name", "Total Amount", "ASIN"];
+  for (let n = 0; n < need.length; n++) {
+    const fieldName = need[n];
+    const hasStd = config.coreMappingStandard[fieldName] && String(config.coreMappingStandard[fieldName]).trim() !== "";
+    const hasDig = config.coreMappingDigital[fieldName] && String(config.coreMappingDigital[fieldName]).trim() !== "";
+    if (!hasStd && !hasDig) return AMZ_IMPORT_INVALID_MSG;
   }
   return null;
 }
 
 /**
  * Resolves which CSV header name exists in col for metadata: digital column first, then standard,
- * then (for digital) Table 2 coreMappingDigital when standardCol matches a logical field's Amazon column.
+ * then (for digital) coreMappingDigital when standardCol matches a logical field's Amazon column.
  * @param {{ key: string, standardCol: string, digitalCol: string }} m
  * @param {Object} col - header name -> index
  * @param {boolean} isDigital
@@ -1696,8 +1784,8 @@ function amzResolveMetadataColumnName(m, col, isDigital, coreMappingStandard, co
  * @param {Object} col - Map of CSV column name -> index
  * @param {Array} metadataMapping - Array of { key, standardCol, digitalCol }
  * @param {boolean} isDigital
- * @param {Object} [coreMappingStandard] - Table 2 Amazon column per logical field (for digital fallback)
- * @param {Object} [coreMappingDigital] - Table 2 Digital column per logical field
+ * @param {Object} [coreMappingStandard] - Order History CSV column per logical field (for digital fallback)
+ * @param {Object} [coreMappingDigital] - Digital orders CSV column per logical field
  * @returns {Object}
  */
 function amzBuildAmazonMetadataObject(csvRow, col, metadataMapping, isDigital, coreMappingStandard, coreMappingDigital) {
@@ -1852,14 +1940,14 @@ function importAmazonRecent(csvText, months, options) {
   const tillerCols = amzGetTillerColumnMap(sheet);
   if (!tillerCols[tillerLabels.METADATA]) {
     return (
-      "Error: Transactions sheet is missing a column whose header matches the AMZ Import Table 4 label for Metadata (expected \"" +
+      "Error: Transactions sheet is missing a column whose header matches the AMZ Import Tiller labels for Metadata (expected \"" +
       String(tillerLabels.METADATA) +
       "\")."
     );
   }
   if (!tillerCols[tillerLabels.DATE]) {
     return (
-      "Error: Transactions sheet is missing a column whose header matches the AMZ Import Table 4 label for Date (expected \"" +
+      "Error: Transactions sheet is missing a column whose header matches the AMZ Import Tiller labels for Date (expected \"" +
       String(tillerLabels.DATE) +
       "\")."
     );
@@ -1883,9 +1971,17 @@ function importAmazonRecent(csvText, months, options) {
     if (h != null && String(h).trim() !== "") col[String(h).trim()] = i;
   });
 
-  const fileKind = amzDetectAmazonCsvFileType(col);
+  const fileKind = amzDetectAmazonCsvFileType(col, config);
   if (!fileKind) {
-    return "Could not detect file type. The CSV must include column \"" + AMZ_DIGITAL_MARKER_HEADER + "\" (Digital orders) or \"" + AMZ_STANDARD_MARKER_HEADER + "\" (Orders).";
+    const digH =
+      config.csvDetection && config.csvDetection.digitalHeader
+        ? String(config.csvDetection.digitalHeader).trim()
+        : AMZ_DIGITAL_MARKER_HEADER;
+    const stdH =
+      config.csvDetection && config.csvDetection.standardHeader
+        ? String(config.csvDetection.standardHeader).trim()
+        : AMZ_STANDARD_MARKER_HEADER;
+    return "Could not detect file type. The CSV must include column \"" + digH + "\" (Digital orders) or \"" + stdH + "\" (Orders).";
   }
   const isDigital = fileKind === "digital";
   const detectedLabel = isDigital
@@ -1894,7 +1990,7 @@ function importAmazonRecent(csvText, months, options) {
 
   if (isDigital) {
     if (config.digitalUserYesCount === 0) {
-      return detectedLabel + "\n" + "Digital orders import requires exactly one row on AMZ Import Table 1 with \"Use for Digital orders?\" set to Yes.";
+      return detectedLabel + "\n" + "Digital orders import requires exactly one row on AMZ Import (payment table) with \"Use for Digital orders?\" set to Yes.";
     }
     if (config.digitalUserYesCount > 1) {
       return detectedLabel + "\n" + "Digital orders import: multiple rows have \"Use for Digital orders?\" set to Yes. Only one row should be Yes.";
@@ -1937,7 +2033,7 @@ function importAmazonRecent(csvText, months, options) {
   const paymentMethodColName = amzGetCoreCsvColumn(config, "Payment Method Type", isDigital);
 
   if (!orderDateCol || !orderIdCol || !productNameCol || !asinCol || !totalAmountCol) {
-    return "AMZ Import Table 2 is missing required core column mappings for this file type.";
+    return "AMZ Import is missing required core column mappings for this file type (CSV column map).";
   }
   if (!isDigital && (!paymentMethodColName || col[paymentMethodColName] === undefined)) {
     return "Your CSV must include the payment column mapped for Payment Method Type. Please request a new Orders export from Amazon.";
@@ -2334,7 +2430,7 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
   const tillerCols = amzGetTillerColumnMap(sheet);
   if (!tillerCols[tillerLabels.DATE]) {
     return (
-      "Error: Transactions sheet is missing a column whose header matches the AMZ Import Table 4 label for Date (expected \"" +
+      "Error: Transactions sheet is missing a column whose header matches the AMZ Import Tiller labels for Date (expected \"" +
       String(tillerLabels.DATE) +
       "\")."
     );
@@ -2353,10 +2449,15 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
     if (h != null && String(h).trim() !== "") col[String(h).trim()] = i;
   });
 
-  const need = ["ASIN", "Order ID", "Return Date", "Transaction Amount"];
-  for (let n = 0; n < need.length; n++) {
-    if (col[need[n]] === undefined) {
-      return "Digital returns CSV must include columns: ASIN, Order ID, Return Date, Transaction Amount.";
+  const DR = "digital returns.csv";
+  const orderIdCol = amzGetSourceMapHeader(config, DR, "Order ID") || "Order ID";
+  const returnDateCol = amzGetSourceMapHeader(config, DR, "Return Date") || "Return Date";
+  const asinCol = amzGetSourceMapHeader(config, DR, "ASIN") || "ASIN";
+  const totalAmountCol = amzGetSourceMapHeader(config, DR, "Transaction Amount") || "Transaction Amount";
+  const needHdrs = [asinCol, orderIdCol, returnDateCol, totalAmountCol];
+  for (let n = 0; n < needHdrs.length; n++) {
+    if (col[needHdrs[n]] === undefined) {
+      return "Digital returns CSV must include columns: " + needHdrs.join(", ") + ".";
     }
   }
 
@@ -2366,11 +2467,6 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
     if (isNaN(cutoff.getTime())) cutoff = null;
   }
   const cutoffStart = amzCutoffStartOfDay_(cutoff);
-
-  const orderIdCol = "Order ID";
-  const returnDateCol = "Return Date";
-  const asinCol = "ASIN";
-  const totalAmountCol = "Transaction Amount";
 
   const lastDataRow = amzGetLastTransactionDataRow(sheet, tillerCols, tillerLabels);
   const existingFullDescSet = new Set();
@@ -2623,14 +2719,14 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
   const tillerCols = amzGetTillerColumnMap(sheet);
   if (!tillerCols[tillerLabels.METADATA]) {
     return (
-      "Error: Transactions sheet is missing a column whose header matches the AMZ Import Table 4 label for Metadata (expected \"" +
+      "Error: Transactions sheet is missing a column whose header matches the AMZ Import Tiller labels for Metadata (expected \"" +
       String(tillerLabels.METADATA) +
       "\")."
     );
   }
   if (!tillerCols[tillerLabels.DATE]) {
     return (
-      "Error: Transactions sheet is missing a column whose header matches the AMZ Import Table 4 label for Date (expected \"" +
+      "Error: Transactions sheet is missing a column whose header matches the AMZ Import Tiller labels for Date (expected \"" +
       String(tillerLabels.DATE) +
       "\")."
     );
@@ -2649,15 +2745,22 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     if (h != null && String(h).trim() !== "") col[String(h).trim()] = i;
   });
 
-  const need = ["Order ID", "Refund Amount", "Website"];
-  for (let n = 0; n < need.length; n++) {
-    if (col[need[n]] === undefined) {
-      return "Orders returns CSV must include columns: Order ID, Refund Amount, Website.";
+  const RD = "refund details.csv";
+  const orderIdCol = amzGetSourceMapHeader(config, RD, "Order ID") || "Order ID";
+  const refundAmountCol = amzGetSourceMapHeader(config, RD, "Refund Amount") || "Refund Amount";
+  const websiteCol = amzGetSourceMapHeader(config, RD, "Website") || "Website";
+  const refundDateCol = amzGetSourceMapHeader(config, RD, "Refund Date") || "Refund Date";
+  const creationDateCol = amzGetSourceMapHeader(config, RD, "Creation Date") || "Creation Date";
+
+  const needCore = [orderIdCol, refundAmountCol, websiteCol];
+  for (let n = 0; n < needCore.length; n++) {
+    if (col[needCore[n]] === undefined) {
+      return "Orders returns CSV must include columns: " + needCore.join(", ") + ".";
     }
   }
-  if (col["Refund Date"] === undefined && col["Creation Date"] === undefined) {
+  if (col[refundDateCol] === undefined && col[creationDateCol] === undefined) {
     return (
-      "Orders returns CSV must include at least one date column: Refund Date or Creation Date."
+      "Orders returns CSV must include at least one date column: " + refundDateCol + " or " + creationDateCol + "."
     );
   }
 
@@ -2667,11 +2770,6 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     if (isNaN(cutoff.getTime())) cutoff = null;
   }
   const cutoffStart = amzCutoffStartOfDay_(cutoff);
-
-  const orderIdCol = "Order ID";
-  const refundAmountCol = "Refund Amount";
-  const refundDateCol = "Refund Date";
-  const websiteCol = "Website";
 
   const lastDataRow = amzGetLastTransactionDataRow(sheet, tillerCols, tillerLabels);
   const existingFullDescSet = new Set();
@@ -2714,9 +2812,9 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
           !isNaN(sd.getTime())
       );
     }
-    if (col["Creation Date"] !== undefined) {
-      const rawCd = csv[1][col["Creation Date"]];
-      const resolved = amzResolveRefundDetailsOrderDate_(csv[1], col);
+    if (col[creationDateCol] !== undefined) {
+      const rawCd = csv[1][col[creationDateCol]];
+      const resolved = amzResolveRefundDetailsOrderDate_(csv[1], col, config);
       timing.push(
         "Server: sample CSV row 1 Creation Date — raw=" +
           JSON.stringify(rawCd) +
@@ -2748,7 +2846,7 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     }
     const amount = sumRefund;
 
-    const orderDate = amzResolveRefundDetailsOrderDate_(r, col);
+    const orderDate = amzResolveRefundDetailsOrderDate_(r, col, config);
     if (!orderDate) {
       skippedInvalidRefundDate += 1;
       amzLogSkippedCsvDataIfUnderCap_(
