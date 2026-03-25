@@ -4,7 +4,7 @@
 
 ## Overview
 
-Tiller Tools is a Google Sheets add-on that allows users to import Amazon order history data into their personal spreadsheets. This add-on operates entirely within the user’s Google account and does not transmit data to external servers.
+Tiller Tools is a Google Sheets add-on that allows users to import Amazon order history data into their personal spreadsheets. Processing occurs in your Google account and browser; the developer does not operate servers that receive your spreadsheet or Amazon export contents, except that your browser loads the JSZip script from a public CDN as described below.
 
 ## Information We Collect
 
@@ -14,6 +14,8 @@ All data processed by the add-on remains within:
 
 - The user’s Google Sheets
 - The user’s browser (during file upload and processing)
+
+The Amazon import sidebar loads the open-source **JSZip** library from a public CDN (cdnjs) in your browser only to unpack a ZIP file you select; that request goes to the CDN operator, not to servers run by the developer, and your files are not sent to the developer’s systems for that step.
 
 ## How Data Is Used
 
@@ -35,13 +37,9 @@ Tiller Tools does not maintain any external databases or servers.
 
 ## Data Sharing
 
-Tiller Tools does not share user data with any third parties.
+The developer does not receive your spreadsheet or Amazon export contents for analytics, advertising, or resale.
 
-There are:
-
-- No external APIs
-- No third-party integrations
-- No data transfers outside Google’s infrastructure
+Aside from the browser loading **JSZip** from the CDN as described above, the add-on does not call third-party **APIs** to send your data to other services; CSV payloads are processed with **Google Apps Script** within Google’s infrastructure to update **your** spreadsheet.
 
 ## Permissions
 
@@ -60,7 +58,7 @@ All data processing occurs within Google’s secure environment, including:
 - Google Apps Script runtime
 - The user’s local browser
 
-No additional data transmission channels are used.
+Aside from your browser fetching the JSZip script from the CDN, no additional data transmission channels are used by the developer.
 
 ## User Control
 
@@ -79,4 +77,6 @@ This privacy policy may be updated from time to time. Updates will be reflected 
 If you have any questions about this Privacy Policy, you can contact:
 
 - **Developer:** Tiller Tools  
-- **Email:** [your-email@example.com] *(replace with your public contact address before publishing)*
+- **Email:** [tillertools.app@gmail.com](mailto:tillertools.app@gmail.com)
+
+See also: [Terms of Service](TERMS.md).
