@@ -2,10 +2,10 @@
 
 One GitHub repo and Apps Script project for **Tiller** (https://tiller.com/) spreadsheets:
 
-- **Tiller Quick Search** — sidebar to filter your **Transactions** sheet by date, amount, description, account, and category (basic filter + helper columns).
-- **Tiller Amazon Import** — sidebar wizard to import Amazon order CSVs from your data-export ZIP into **Transactions** (with **AMZ Import** configuration). Large exports are sent to Apps Script in **separate chunks** (one main CSV per round trip, plus a final step that sorts/filters Transactions) so big ZIPs stay reliable.
+- **Tiller Amazon Import** — sidebar wizard: upload Amazon’s **orders data ZIP**, map payment types on the **AMZ Import** tab, and append purchase/return rows to your **Transactions** sheet with balancing **offsets** where needed.
+- **Tiller Quick Search** — sidebar to filter **Transactions** by date, amount, description, account, and category (basic filter + helper columns).
 
-Repository: [github.com/daveinlosbarriles/TillerTools](https://github.com/daveinlosbarriles/TillerTools). Use **clasp** from this folder to push everything, or copy individual files into an Apps Script project as described below.
+Repository: [github.com/daveinlosbarriles/TillerTools](https://github.com/daveinlosbarriles/TillerTools).
 
 This software is produced by a Tiller user and is not affiliated with Tiller LLC.
 
@@ -18,27 +18,118 @@ This software is produced by a Tiller user and is not affiliated with Tiller LLC
 
 Questions: **tillertoolsbydave@gmail.com**
 
-## Google Workspace add-on
+---
 
-This project is set up as a **Google Sheets Editor add-on**:
+## Install (supported path: bound script, copy/paste)
 
-- **[`appsscript.json`](appsscript.json)** — `addOns.common` (name **Tiller Tools**, `logoUrl` → logo in `assets/` via GitHub raw), Sheets host, and **`tillerToolsOnHomepage`** for the side-panel welcome card.
-- **[`Code.js`](Code.js)** — **`onInstall`** / **`onOpen`**, **`createMenu("Tiller Tools")`** with **Tiller Amazon Import** and **Tiller Quick Search** (works for sheet-bound scripts and for many add‑on installs; after install, also check **Extensions**).
-- **OAuth scopes** (declare the same on the Google Cloud **OAuth consent screen**):
-  - `https://www.googleapis.com/auth/spreadsheets.currentonly`
-  - `https://www.googleapis.com/auth/script.container.ui`
+**This is the documented install:** bind the project to your Tiller spreadsheet and paste the files in the Apps Script editor. A future **Google Workspace Marketplace** add-on is *not* part of these instructions; the repo still contains `appsscript.json` add-on metadata for developers who use **clasp**.
 
-Distribute via **Deploy → Test deployments** / **Google Workspace Marketplace**, link a **standard GCP project**, and add **test users** while the OAuth app is in *Testing*.
+### Step 1: Open Apps Script and add files
 
-## clasp notes
+1. Open your **Tiller Google Sheet**.
+2. Go to **Extensions** → **Apps Script**. A new tab opens with the Apps Script editor.
+3. Remove or replace the default `Code.gs` sample if present. Add the files below (names matter for HTML includes).
 
-- **[`.claspignore`](.claspignore)** — ignores a local **`TillerAmazonOrdersCSVImport/`** folder if you still have an old clone next to this repo (so it is not pushed to Apps Script).
+   **Creating files**
+
+   - **Script (`.gs`):** click **+** next to *Files* → **Script** → type the name (no extension in the dialog) → paste repo content → save.
+   - **HTML:** **+** → **HTML** → type the name **without** `.html` in the dialog → paste → save.
+
+   **Files to add**
+
+   | Paste from repo | Apps Script name | Notes |
+   |-----------------|------------------|--------|
+   | [`Code.js`](Code.js) | `Code` (shows as **Code.gs**) | Menu **Tiller Tools** → Amazon Import + Quick Search; includes add-on homepage hook for future listing |
+   | [`QuickSearchSidebar.js`](QuickSearchSidebar.js) | `QuickSearchSidebar` | Saves as **QuickSearchSidebar.gs** |
+   | [`QuickSearch.html`](QuickSearch.html) | `QuickSearch` | Sidebar UI |
+   | [`amazonorders.gs`](amazonorders.gs) | `amazonorders` | All Amazon CSV pipelines |
+   | [`AmazonOrdersSidebar.html`](AmazonOrdersSidebar.html) | `AmazonOrdersSidebar` | Import sidebar (matches `HtmlService.createHtmlOutputFromFile("AmazonOrdersSidebar")`) |
+   | [`AmazonOrdersDialog.html`](AmazonOrdersDialog.html) | `AmazonOrdersDialog` | Optional / legacy; menu uses the sidebar |
+
+   **Quick Search only:** omit the three Amazon files and remove the **Tiller Amazon Import** line from `Code.gs` (see comments in `Code.js`).
+
+4. **Save** the project (Ctrl+S) and give it a name (e.g. “Tiller Tools”) if prompted.
+
+### Step 2: Enable Google Sheets API (Quick Search)
+
+Quick Search uses the **Sheets API**.
+
+1. In the Apps Script editor, open **Services** (or **Advanced Google Services** in older UIs).
+2. Turn **Google Sheets API** **On**.
+3. If prompted, open **Google Cloud Console** for the same project and ensure **Google Sheets API** is enabled.
+
+### Step 3: Authorize and open the tools
+
+1. Reload the **spreadsheet** tab (F5).
+2. Use the **Tiller Tools** menu on the menu bar (**Extensions** may also list the same items depending on your workspace).
+3. Choose **Tiller Amazon Import** or **Tiller Quick Search**. The first run opens Google **authorization** (Advanced → continue to your project → Allow). The script only accesses the current spreadsheet.
+
+### For developers (optional): clasp
+
+From a clone of this repo, `clasp login`, link or clone the Apps Script project, then `clasp push` to sync `.gs` / `.html` / `appsscript.json`. See [`.claspignore`](.claspignore) (e.g. ignores a legacy local `TillerAmazonOrdersCSVImport/` folder if present).
+
+**OAuth scopes** declared in [`appsscript.json`](appsscript.json) include Spreadsheets (current only) and `script.container.ui`. Match these on the Cloud **OAuth consent screen** if you publish an add-on later.
+
+---
+
+## What you need in the spreadsheet
+
+- **Transactions** — Tiller column headers in row 1 (Date, Description, Amount, Account, etc.). Amazon import reads target column names from the **AMZ Import** sheet (Table 4).
+- **Categories** — Quick Search builds the category list from column A (category) and B (group) from row 2 down.
+- **Accounts** — Quick Search reads account names from column **J**, row 2 down; rows with **Hide** in column **Q** are skipped.
+- **AMZ Import** — created automatically the first time you run Amazon import, with default payment tables and Tiller label mapping. Edit payment **Type → Account** mappings here before importing if the wizard flags unknown methods.
+
+---
+
+## Tiller Amazon Import — how it works
+
+### Get your data from Amazon
+
+Use Amazon’s **privacy / data request** flow to download a ZIP of your orders (the sidebar links to the request page). After Amazon emails the file, download the ZIP and use **Choose orders ZIP file** in the wizard.
+
+### What the ZIP can contain
+
+The importer looks for these names (case-insensitive paths inside the ZIP):
+
+| File | Used for |
+|------|-----------|
+| **Order History.csv** | Physical / Whole Foods / Amazon Fresh **orders** (line items), when **Orders** and/or **Whole Foods / Amazon Fresh** is checked |
+| **Refund Details.csv** or **Returns.csv** | **Orders returns** (refund amounts by Order ID) |
+| **Digital Content Orders.csv** | Digital purchases |
+| **Digital Returns.csv** | Digital returns |
+
+Not every export includes every file; the wizard lists which ones it found.
+
+### Wizard steps (summary)
+
+1. **ZIP** — Select the file; **Next** reads the archive in the browser (JSZip).
+2. **Options** — Choose what to include:
+   - **Orders** (Order History, non–Whole Foods style rows as configured),
+   - **Orders Returns** (Refund Details / Returns),
+   - **Digital orders**, **Digital returns**,
+   - **Whole Foods / Amazon Fresh** (website filter on Order History).
+3. **Cutoff** — **Ignore orders older than** sets a calendar cutoff (recommended: overlap a month or two with your last import). Rows on the cutoff day are included.
+4. **Category for offsets** — Optional Tiller category for **offset** rows (to net Amazon lines against card spending; see in-app help).
+5. **Check for new payment methods** — When checked, the flow can pause so you can align Amazon **payment types** with **Accounts** on **AMZ Import** before **Import** runs.
+6. **Import** — Runs the selected pipelines. Large bundles run in **chunks** (one network round trip per CSV pipeline, then a **finalize** step that sorts the Transactions sheet and applies a **Metadata** filter for this run’s import timestamp). **Do not close the sidebar** until the run finishes, or later steps may not run.
+
+### After import
+
+- New rows appear on **Transactions**; descriptions follow `[AMZ]` / `[AMZD]` conventions and metadata JSON identifies the pipeline.
+- **Duplicate** lines (same import keys already present in Metadata) are skipped; the status line reads *“N duplicate transactions were not imported.”*
+- **Show debug messages** reveals server timing and diagnostic lines; leave it off for a shorter log.
+
+### Behavior notes
+
+- **Orders returns (Refund Details):** Transaction date uses **Refund Date** when it parses; if Amazon shows **Not Applicable** or the cell is otherwise unusable, **Creation Date** is used when present. Refund groups that sum to **$0** are skipped without extra messages. The CSV must include **Order ID**, **Refund Amount**, **Website**, and at least one of **Refund Date** or **Creation Date**.
+- **Offsets:** Purchase imports add offset rows so card charges and item lines do not double-count; refund flows add matching offset logic. Use the **AMZ Import** sheet and in-wizard hints to keep payment accounts consistent.
 
 ---
 
 ## Tiller Quick Search — key features
 
 **Search by:**
+
 - **Date** – range or exact From / To
 - **Amount** – min and max
 - **Description** – “contains” text, with options like:
@@ -54,141 +145,45 @@ Distribute via **Deploy → Test deployments** / **Google Workspace Marketplace*
 
 <img width="3840" height="2063" alt="Tiller Tools screenshot" src="https://github.com/user-attachments/assets/80d36566-54d4-40f0-b86d-35040a49a8e1" />
 
----
+### First-time use: two new columns
 
-## What you need
+The first time you search, the script may add **QuickSearch** and **QuickCriteria** on the right of **Transactions**. You can delete them; they are recreated on the next search if missing.
 
-- A Google Sheet that uses **Tiller** (or has the same structure), with at least these sheets:
-  - **Transactions** – with columns such as Date, Description, Category, Amount, Account
-  - **Categories** – used for the category list in the sidebar
-  - **Accounts** – used for the account list in the sidebar
+### How the filter works
 
----
-
-## Installation
-
-### Step 1: Open the Apps Script editor and add the script files
-
-1. Open your Tiller Google Sheet.
-2. In the menu, click **Extensions** → **Apps Script**.  
-   A new tab opens with the Apps Script editor (code view).
-3. If you see a default file like `Code.gs` with some sample code, you can replace it or add new files. For **both** Quick Search and Amazon import, add at least: **Code.gs**, **QuickSearchSidebar.gs**, **QuickSearch.html**, **amazonorders.gs**, **AmazonOrdersSidebar.html** (and optionally `AmazonOrdersDialog.html`). For **Quick Search only**, you can omit the Amazon files and remove the Amazon menu line from **Code.js**.
-
-   **Creating or replacing files:**
-   - **Code.gs** — Add **onInstall** (calling **onOpen**) and **onOpen** from **Code.js**, or paste the whole **Code.js** as **Code.gs**. The file also defines **`tillerToolsOnHomepage`** for the Workspace add-on card; merge carefully if you already have an **onOpen** handler. Apps Script uses the **.gs** extension on disk.
-   - **QuickSearchSidebar.gs**  
-     - Click **+** → **Script**, name it `QuickSearchSidebar`, then paste the contents of **QuickSearchSidebar.js** from this repo. It will appear as **QuickSearchSidebar.gs**.
-   - **QuickSearch.html**  
-     - Click **+** → **HTML**, name it `QuickSearch`, then paste the contents of **QuickSearch.html** from this repo. Leave the name as **QuickSearch** (no “.html” in the file list is fine).
-   - **Amazon import (optional):** Add **amazonorders.gs** and **AmazonOrdersSidebar.html** the same way (script + HTML). Match the file names the script expects (`HtmlService.createHtmlOutputFromFile("AmazonOrdersSidebar")`).
-
-4. Save everything: **File** → **Save** (or Ctrl+S). Give the project a name (e.g. “Tiller Tools”) if prompted.
-
-   **Using clasp:** Clone this repo, run `clasp login` and `clasp clone` / link your Apps Script project, then `clasp push` so all `.gs` / `.html` files and `appsscript.json` stay in sync with GitHub.
-
-5. **Permissions (first run):**  
-   The first time you use the script (e.g. reload the sheet and open **Tiller Tools** → **Tiller Quick Search** or **Tiller Amazon Import**), Google will ask you to authorize the app:
-   - Click **Review permissions**, choose your account, then **Advanced** → **Go to [project name] (unsafe)** (this is your own script).
-   - Click **Allow**.  
-   This lets the script read and filter your sheet. No data is sent to anyone else.
-
----
-
-### Step 2: Turn on the Google Sheets API (v4)
-
-Quick Search needs the **Sheets API** to work properly.
-
-1. In the Apps Script editor (same tab as your code), click **Services** in the left sidebar (the “+” / add services icon).  
-   - If you don’t see “Services”, try **Resources** → **Advanced Google Services** (older editor) or **Services** (new editor).
-2. Find **Google Sheets API** (or “Sheets API”) in the list and turn it **On**.
-3. If you’re in **Advanced Google Services**, also check the link at the bottom: **Google Cloud Console**. Click it and make sure the **Google Sheets API** is enabled for the same project. Then return to Apps Script.
-
-Once this is on, you don’t need to do it again.
-
----
-
-### Step 3: Open the tools
-
-1. Go back to your Google Sheet tab and **reload the page** (F5 or refresh).
-2. Open the **Tiller Tools** menu (**top menu bar**, or **Extensions** when using an installed Workspace add-on).
-3. Choose:
-   - **Tiller Quick Search** — sidebar for filters; click **Search** when ready.
-   - **Tiller Amazon Import** — ZIP wizard; follow the steps to pick your Amazon export, categories, and import.
-
----
-
-## First-time use: two new columns
-
-The **first time** you run a search (or the first time the script needs the helper columns), it will add **two columns** to the right of your **Transactions** sheet:
-
-- **QuickSearch** – shows TRUE/FALSE for each row (whether the row matches your current criteria).
-- **QuickCriteria** – a hidden-style cell that stores the current criteria so the filter can work.
-
-These columns are **normal sheet columns**. You can:
-
-- **Delete them** anytime (e.g. to tidy the sheet). The next time you click **Search** in the sidebar, the script will add them again at the end of the sheet.
-- **Leave them in place** – then each time you click **Search**, only the criteria and the TRUE/FALSE values update; the columns stay where they are.
-
-You don’t need to edit these columns yourself; the script fills them in.
-
----
-
-## How the filter works (basic filter)
-
-Quick Search applies a **basic filter** to your **Transactions** sheet (the same kind you get from **Data** → **Create a filter**). It sets the filter so that only rows where **QuickSearch** is TRUE are shown.
-
-Because it’s a normal basic filter:
-
-- You can **add more criteria** using the filter dropdowns in the header row (e.g. filter by another column).
-- You can **change or clear** the filter using the sheet’s filter icon and dropdowns as usual.
-- Quick Search only controls the criteria that affect the **QuickSearch** column; the rest of the filter behavior is the same as any other filtered sheet.
-
----
-
-## Where the lists come from (dependencies)
-
-- **Category list** in the sidebar is read from your **Categories** sheet: the first column (Category) and second column (Group). The script uses data starting at row 2. A “(Blank)” option is added so you can search for transactions with no category.
-- **Account list** in the sidebar is read from your **Accounts** sheet: the account names from column **J**, starting at row 2. Any row where column **Q** is **Hide** is skipped, so those accounts don’t appear in the list.
-
-Your Transactions sheet must have columns that match what Tiller uses (e.g. Date, Description, Category, Amount, Account). The script finds them by the header names in row 1.
-
----
-
-## Repo contents (for reference)
-
-| File in repo   | In Apps Script   | Purpose |
-|----------------|------------------|--------|
-| Code.js        | Code.gs          | `onInstall` / `onOpen`, **Tiller Tools** menu → **Tiller Amazon Import**, **Tiller Quick Search**; Card homepage `tillerToolsOnHomepage` |
-| QuickSearchSidebar.js | QuickSearchSidebar.gs | All Quick Search logic (criteria, filter, helper columns) |
-| QuickSearch.html      | QuickSearch.html  | Sidebar UI |
-| amazonorders.gs | amazonorders.gs | Amazon CSV import pipelines, **`importAmazonBundleChunk`**, finalize sort/filter |
-| AmazonOrdersSidebar.html | AmazonOrdersSidebar.html | Amazon import **sidebar** (ZIP, JSZip in browser, chunked `google.script.run`) |
-| AmazonOrdersDialog.html | AmazonOrdersDialog.html | Legacy modal UI (unused if menu opens the sidebar) |
-| appsscript.json       | (project config) | Time zone, scopes, Sheets advanced service, **`addOns`** for Workspace listing |
-| assets/tiller-tools-logo.png | — | Add-on icon; referenced by `logoUrl` (GitHub raw URL) |
-| PRIVACY.md / TERMS.md | — | Privacy and terms (not deployed by clasp) |
-
-### Architecture
-
-**Quick Search** and **Amazon import** do not call each other; they share only the menu in **Code.js**. Each has its own header→column map (`getTillerColumnMap` vs `amzGetTillerColumnMap`). To ship **one** feature only, delete the other’s files and drop its menu item(s) from **Code.js**.
-
-### Source of truth
-
-All source for both tools is in **[TillerTools](https://github.com/daveinlosbarriles/TillerTools)**. Commit and push here; there is no separate mirror repo.
+Quick Search applies a **basic filter** so only rows where **QuickSearch** is TRUE are shown. You can combine with other filter dropdowns as usual.
 
 ---
 
 ## Usage tips
 
-- **Quick Search:** **Tiller Tools** → **Tiller Quick Search**, set date range, amount, description, account, and/or category, then click **Search**.
-- **Amazon import:** **Tiller Tools** → **Tiller Amazon Import**, choose your orders ZIP, select which CSV pipelines to run, then complete payment-method review if prompted before **Import**.
-- Use **Reset All** or the **×** next to each section to clear criteria.
-- In **Description**, you can use plain text or simple **regex** (e.g. `Amazon|Walmart` for “Amazon or Walmart”). Use **` but not `** (with spaces) to require one phrase and exclude another (e.g. `gas but not chevron`). Click the **Description** label in the sidebar for examples.
+- **Quick Search:** set criteria, then **Search**.
+- **Amazon import:** complete payment review if prompted, then **Import**. Use **Start over** to pick a new ZIP.
+- **Description** regex and **` but not `** syntax: see examples above and the sidebar help on **Description**.
 
 ---
 
-## To Uninstall
+## Repo contents (reference)
 
-1. **Remove the menu and script files:** Open **Extensions** → **Apps Script**. Remove the **onInstall** / **onOpen** code (or the Tiller Tools menu) from **Code.gs** so the menu no longer appears. Delete **QuickSearchSidebar.gs**, **QuickSearch.html**, and if used **amazonorders.gs** / **AmazonOrdersSidebar.html** / **AmazonOrdersDialog.html**.
-2. **Optional – remove the helper columns:** On your **Transactions** sheet, delete the **QuickSearch** and **QuickCriteria** columns if they were added. You can delete them like any other columns (right‑click the column letter → Delete column).
-3. **Optional – clear the filter:** If a filter is still applied to the Transactions sheet, turn it off via **Data** → **Turn off filter** (or use the filter icon in the toolbar).
+| File in repo | In Apps Script | Purpose |
+|--------------|----------------|---------|
+| `Code.js` | `Code.gs` | Menu, `onInstall` / `onOpen`, optional add-on homepage |
+| `QuickSearchSidebar.js` | `QuickSearchSidebar.gs` | Quick Search logic |
+| `QuickSearch.html` | `QuickSearch.html` | Quick Search sidebar UI |
+| `amazonorders.gs` | `amazonorders.gs` | Amazon CSV pipelines, chunked bundle + finalize |
+| `AmazonOrdersSidebar.html` | `AmazonOrdersSidebar.html` | Amazon ZIP wizard UI |
+| `AmazonOrdersDialog.html` | `AmazonOrdersDialog.html` | Legacy dialog HTML |
+| `appsscript.json` | project settings | Time zone, scopes, optional `addOns` block |
+| `assets/tiller-tools-logo.png` | — | Icon URL referenced for a future listing |
+
+**Quick Search** and **Amazon import** do not call each other; they share only the menu in `Code.js`.
+
+**Source of truth:** [github.com/daveinlosbarriles/TillerTools](https://github.com/daveinlosbarriles/TillerTools).
+
+---
+
+## To uninstall
+
+1. **Extensions** → **Apps Script** — remove or edit **Code.gs** so the menu is gone; delete **QuickSearchSidebar.gs**, **QuickSearch.html**, `amazonorders.gs`, **AmazonOrdersSidebar.html**, **AmazonOrdersDialog.html** as needed.
+2. Optionally delete **QuickSearch** / **QuickCriteria** columns on **Transactions**.
+3. Optionally **Data** → **Turn off filter** on **Transactions**.
