@@ -136,7 +136,7 @@ Refund CSVs don’t always include the same payment info as Order History. When 
 
 - Optional **Digital Content Orders** CSV → `amzOrderIdToPaymentStringMapFromCsv` in digital mode; else **Use for Digital** account from **AMZ Import**.
 
-**Column names** for refund/return files come from **AMZ Import** unified map (`amzGetSourceMapHeader`, `refund details.csv` / `digital returns.csv`) with fallbacks to Amazon defaults. **Observed Amazon headers** for **Refund Details**, **Order History**, and **Digital Content Orders** are listed in **§11.1**–**§11.3** so maintainers need not infer layout from screenshots each time.
+**Column names** for refund/return files come from **AMZ Import** unified map (`amzGetSourceMapHeader`, `refund details.csv` / `digital returns.csv`) with fallbacks to Amazon defaults. **Observed Amazon headers** for **Refund Details**, **Order History**, **Digital Content Orders**, and **Digital returns** are listed in **§11.1**–**§11.4** so maintainers need not infer layout from screenshots each time.
 
 ---
 
@@ -215,7 +215,7 @@ Strings like **“Not Applicable”** fail `Date` parse → `null` → falls thr
 
 ## 11. Amazon data-export CSV reference (verified columns)
 
-This section records **actual column order** from Amazon **Request My Data** exports as verified in your sheet, so design and code assumptions stay grounded. **Update §11** when Amazon changes an export or you add a **Digital returns** table here.
+This section records **actual column order** from Amazon **Request My Data** exports as verified in your sheet, so design and code assumptions stay grounded. **Update §11** when Amazon changes an export shape.
 
 **How to extend:** Add a subsection per file with the **exact header row** (left-to-right). If a column name is ambiguous in the UI, spell the full string as it appears in the CSV.
 
@@ -296,6 +296,33 @@ ASIN,Billing Address,Carrier Name,Currency,Gift Message,Gift Recipient,Gift Send
 
 ```text
 Order Date,Order ID,Title,Category,ASIN,Website,Purchase Price Per Unit,Quantity,Payment Instrument Type,Purchase Date,Shipping Address Name,Shipping Address Street 1,Shipping Address Street 2,Shipping Address City,Shipping Address State,Shipping Address Zip,Order Status,Carrier Name & Tracking Number,Item Subtotal,Item Subtotal Tax,Item Total,Tax Exemption Applied,Tax Exemption Type,Exemption Opt-Out,Buyer Name,Currency,Group Name,Service Order
+```
+
+### 11.4 Digital Returns.csv (`digital returns.csv`)
+
+**25 columns**, left-to-right. One **logical return** often spans **several CSV rows** (e.g. **Monetary Component** = `Tax` vs `Price Amount`); `importDigitalReturnsCsv` **groups by Order ID** and sums **Transaction Amount** (and uses **Return Date**, **ASIN**). **Order ID** values are digital-style (`D01-…`), consistent with Digital Content Orders.
+
+**Digital returns — column headers and sample rows**
+
+| ASIN | Affected Item Count | Amount Refunded | Base Currency | Claim Code | Condition | Delivery Party | Digital Order ID | FX Currency | FX Transaction Amount | Monetary Component | Offer Type | Order ID | Payment Instrument | Processing Status | Product Name | Quantity | Reason Code | Refund to Original Payment Method | Return Date | Return Status | Returned By | Settlement Type | Status | Transaction Amount |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| B003KJU7I | 1 | 2.19 | USD | Not Available | Unused | 9QCA6MU | 2PAQ39LF | Not Available | Not Available | Tax | Not Available | D01-9248… | Not Available | Yes | Not Applicable | 1 | Accidental | No | 2017-05-2 | Customer | Customer | Manual | Amount Settled… | 0.2 |
+| B003KJU7I | 1 | 2.19 | USD | Not Available | Unused | 9QCA6MU | 2PAQ39LF | Not Available | Not Available | Price Amount | Not Available | D01-9248… | Not Available | Yes | Not Applicable | 1 | Accidental | No | 2017-05-2 | Customer | Customer | Manual | Amount Settled… | 1.99 |
+| B00IMYZL2 | 1 | 5.46 | USD | Not Available | Used | DH94MKLI | VLJICPHO | Not Available | Not Available | Tax | Promotion | D01-8808… | Not Available | Yes | Marvel Stu… | 1 | Internal Re… | No | 2014-05-2 | Customer | Amazon In… | Manual | Amount Settled… | 0.47 |
+| B00IMYZL2 | 1 | 5.46 | USD | Not Available | Used | DH94MKLI | VLJICPHO | Not Available | Not Available | Price Amount | Promotion | D01-8808… | Not Available | Yes | Marvel Stu… | 1 | Internal Re… | No | 2014-05-2 | Customer | Amazon In… | Manual | Amount Settled… | 4.99 |
+
+*Order IDs and labels use `…` where the UI truncated; **Amount Refunded** repeats on each component row; **Transaction Amount** is the amount for that component.*
+
+**Observed details**
+
+- **Return Date** in these samples uses **`YYYY-MM-D`** (day may be unpadded).
+- **Dedup** for new imports uses Metadata keys such as `digital-return|Order ID|asin` (§4); grouping must reconcile **multiple file rows** per order.
+- **Digital Order ID** (shorter internal id) is separate from **Order ID** (`D01-…`) in the file.
+
+**Header row as comma-separated:**
+
+```text
+ASIN,Affected Item Count,Amount Refunded,Base Currency,Claim Code,Condition,Delivery Party,Digital Order ID,FX Currency,FX Transaction Amount,Monetary Component,Offer Type,Order ID,Payment Instrument,Processing Status,Product Name,Quantity,Reason Code,Refund to Original Payment Method,Return Date,Return Status,Returned By,Settlement Type,Status,Transaction Amount
 ```
 
 ---
