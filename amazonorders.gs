@@ -2537,6 +2537,52 @@ function importAmazonRecent(csvText, months, options) {
     );
   }
   const padded = amzPadRowsToWriteCols(rowsToWrite, writeCols);
+
+  // #region agent log
+  (function amzDebugImportWriteRow0_() {
+    const r0 = padded[0];
+    if (!r0 || !ci) return;
+    const di = ci.DATE - 1;
+    const wi = ci.WEEK - 1;
+    const mi = ci.MONTH - 1;
+    const dv = r0[di];
+    const wv = r0[wi];
+    const mv = r0[mi];
+    timing.push(
+      "Server: DEBUG H1_preWrite row0 startRow=" +
+        startRow +
+        " writeCols=" +
+        writeCols +
+        " len=" +
+        r0.length +
+        " DATE_idx1b=" +
+        ci.DATE +
+        " val_type=" +
+        typeof dv +
+        " isDate=" +
+        (dv instanceof Date) +
+        (dv instanceof Date && !isNaN(dv.getTime()) ? " time=" + dv.getTime() : "")
+    );
+    timing.push(
+      "Server: DEBUG H2_preWrite WEEK_idx1b=" +
+        ci.WEEK +
+        " val_type=" +
+        typeof wv +
+        " isDate=" +
+        (wv instanceof Date) +
+        (wv instanceof Date && !isNaN(wv.getTime()) ? " time=" + wv.getTime() : "")
+    );
+    timing.push(
+      "Server: DEBUG H3_preWrite MONTH_idx1b=" +
+        ci.MONTH +
+        " val_type=" +
+        typeof mv +
+        " sample=" +
+        String(mv).slice(0, 14)
+    );
+  })();
+  // #endregion
+
   sheet.getRange(startRow, 1, padded.length, writeCols).setValues(padded);
   SpreadsheetApp.flush();
   const tWriteEnd = Date.now();
@@ -2554,6 +2600,22 @@ function importAmazonRecent(csvText, months, options) {
         ? "Date isDate=" + !isNaN(d.getTime())
         : "type=" + typeof d + (d != null ? " valLen=" + String(d).length : "");
     timing.push("Server: post-write first row Date column — " + dLabel);
+    let f = "";
+    try {
+      f = sheet.getRange(startRow, ci.DATE).getFormula() || "";
+    } catch (eF) {
+      f = "?";
+    }
+    timing.push(
+      "Server: DEBUG H5_postWrite Date col formulaLen=" + String(f).length + (f ? " prefix=" + String(f).slice(0, 25) : "")
+    );
+    const headN = Math.min(8, writeCols);
+    const head = sheet.getRange(startRow, 1, 1, headN).getValues()[0];
+    const types = [];
+    for (let hi = 0; hi < head.length; hi++) {
+      types.push(head[hi] instanceof Date ? "Date" : typeof head[hi]);
+    }
+    timing.push("Server: DEBUG H4_postWrite cells1_to_" + headN + "_types=" + types.join(","));
   } catch (eRw) {
     timing.push("Server: post-write readback Date: " + (eRw.message || String(eRw)));
   }
