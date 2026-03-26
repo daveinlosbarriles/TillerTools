@@ -215,7 +215,7 @@ Strings like **“Not Applicable”** fail `Date` parse → `null` → falls thr
 
 ## 11. Amazon data-export CSV reference (verified columns)
 
-This section records **actual column order** from Amazon **Request My Data** exports as verified in your sheet, so design and code assumptions stay grounded. **Update §11** when Amazon changes an export or you confirm another file (Order History, Digital Content Orders, Digital returns).
+This section records **actual column order** from Amazon **Request My Data** exports as verified in your sheet, so design and code assumptions stay grounded. **Update §11** when Amazon changes an export or you add Digital Content Orders / Digital returns tables here.
 
 **How to extend:** Add a subsection per file with the **exact header row** (left-to-right). If a column name is ambiguous in the UI, spell the full string as it appears in the CSV.
 
@@ -243,6 +243,33 @@ Creation Date,Currency,Direct Debit,Disbursement Type,Order ID,Payment Status,Qu
 ```
 
 **Process:** Prefer **asking you** or reading **§11** / the CSV over guessing Amazon’s column strings when implementing or reviewing mappings.
+
+### 11.2 Order History.csv (`order history.csv`)
+
+**28 columns**, left-to-right. Headers and rows below match a **verified export / sheet view** (UI column widths truncated many titles and values; `…` marks abbreviation; **full strings live in the CSV**).
+
+**Duplicate headers:** The export includes **two** columns titled **Shipment Item** (or spreadsheet truncation of the same label) and **two** titled **Unit Price**. Parsers that build a map `header → column index` from a single pass may **overwrite** an earlier index—implementation uses the unified **AMZ Import** map and expected names in code; when in doubt resolve by **0-based column order** from a real file.
+
+**Order History — column headers and sample rows**
+
+| ASIN | Billing Address | Carrier Name | Currency | Gift Message | Gift Recipient | Gift Sender | Item Serial Number | Order Date | Order ID | Order Status | Original Quantity | Payment Method Type | Product Condition | Product Name | Purchase Price | Ship Date | Shipment Item | Shipment Item | Shipment Status | Shipping Address | Shipping Charge | Shipping Option | Total Amount | Total Discount | Unit Price | Unit Price | Website |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| B001CSO79O | | USPS(93748… | USD | Not Avail… | Not Avail… | Not Avail… | Not Avail… | 2015-12-1 | 103-00861… | Closed | 1 | American E… | New | Canon PGI… | Not Applic… | 2015-12-2 | 32.01 | 3.07 | Shipped | | 0 | second | 35.08 | 0 | 32.01 | 3.07 | Amazon.co… |
+| B08GYKYZ1R | | FEDEX_NE… | USD | Not Avail… | Not Avail… | Not Avail… | Not Avail… | 2025-10-3 | 114-9962… | Closed | 3 | Visa - 853… | Used | Hi-Lift Jack LM-100 Li… | Not Applic… | 2025-10-4 | 72.96 | 5.55 | Shipped | | 0 | Std US D2I | 30.69 | -1.5 | 9.99 | 0.74 | Amazon.co… |
+
+*The source screenshot showed **five** data rows; only the two above are transcribed here with concrete examples (ASINs, carriers, payments, totals). Paste additional CSV lines into this doc if you want all rows archived verbatim.*
+
+**Observed details**
+
+- **Order ID** is the primary join key for line items, offsets, dedup (with ASIN/ISBN), and refund payment hints.
+- **Order Date** and **Ship Date** use `YYYY-MM-D`; day may be **unpadded** (e.g. `2015-12-1`).
+- **Billing Address** / **Shipping Address** may be empty in samples; gift/serial fields often show **Not Available** (truncated in UI as **Not Avail…**).
+
+**Header row as comma-separated (duplicate names preserved as in export):**
+
+```text
+ASIN,Billing Address,Carrier Name,Currency,Gift Message,Gift Recipient,Gift Sender,Item Serial Number,Order Date,Order ID,Order Status,Original Quantity,Payment Method Type,Product Condition,Product Name,Purchase Price,Ship Date,Shipment Item,Shipment Item,Shipment Status,Shipping Address,Shipping Charge,Shipping Option,Total Amount,Total Discount,Unit Price,Unit Price,Website
+```
 
 ---
 
