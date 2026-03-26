@@ -16,7 +16,8 @@ This document explains how the **ZIP sidebar** (`AmazonOrdersSidebar.html`) and 
 | [8](#8-metadata-fields-how-csv-values-become-amazon-json) | Building the `amazon` object in Metadata |
 | [9](#9-sort-order-and-metadata-filter-why-this-approach) | Sort + filter after import |
 | [10](#10-error-handling-and-missing-values-especially-refund-dates) | Skips, stops, and refund dates |
-| [11](#11-troubleshooting-blank-date--date-added--week) | Blank Date / Date Added / Week on import |
+| [11](#11-amazon-data-export-csv-reference-verified-columns) | Amazon export CSV columns (reference) |
+| [12](#12-troubleshooting-blank-date--date-added--week) | Blank Date / Date Added / Week on import |
 
 ---
 
@@ -95,7 +96,7 @@ Re-importing the same Amazon rows should not create duplicates. The importer bui
 
 **Key shapes (by `amazon.type` and patterns):** e.g. `physical-purchase-line|orderId|normalizedAsinOrIsbn`, `digital-purchase|orderId`, `refund-detail|orderId|amount`, `legacy-return|orderId|contractId` (from metadata `type: "return"` or Full Description), `digital-return|orderId|asin`, plus `*-offset` types — see `amzAddDedupKeysForAmazonMeta_` and `amzAddDedupKeysFromFullDescriptionLine_`.
 
-**Orders returns:** If **Refund Details** maps an optional **Contract ID** column and the file includes it, import also treats `legacy-return|…` as a duplicate key (for rows already imported under the older return metadata / description shape).
+**Orders returns:** Amazon’s standard **Refund Details** export does **not** include **Contract ID** (see §11). **Legacy-return** dedup for refunds therefore comes from existing sheet rows (**Metadata** with `type: "return"` or **Full Description** `… with Contract ID …`). If you ever map an optional **Contract ID** column on **AMZ Import** and the file contains it, import also treats `legacy-return|…` as a duplicate key for CSV-side checks.
 
 **During import:**
 
@@ -135,7 +136,7 @@ Refund CSVs don’t always include the same payment info as Order History. When 
 
 - Optional **Digital Content Orders** CSV → `amzOrderIdToPaymentStringMapFromCsv` in digital mode; else **Use for Digital** account from **AMZ Import**.
 
-**Column names** for refund/return files come from **AMZ Import** unified map (`amzGetSourceMapHeader`, `refund details.csv` / `digital returns.csv`) with fallbacks to Amazon defaults.
+**Column names** for refund/return files come from **AMZ Import** unified map (`amzGetSourceMapHeader`, `refund details.csv` / `digital returns.csv`) with fallbacks to Amazon defaults. **Observed Amazon headers** for this file are listed in **§11** so maintainers need not infer layout from screenshots each time.
 
 ---
 
@@ -212,7 +213,47 @@ Strings like **“Not Applicable”** fail `Date` parse → `null` → falls thr
 
 ---
 
-## 11. Troubleshooting: blank Date / Date Added / Week
+## 11. Amazon data-export CSV reference (verified columns)
+
+This section records **actual column order** from Amazon **Request My Data** exports as verified in your sheet, so design and code assumptions stay grounded. **Update §11** when Amazon changes an export or you confirm another file (Order History, Digital Content Orders, Digital returns).
+
+**How to extend:** Add a subsection per file with the **exact header row** (left-to-right). If a column name is ambiguous in the UI, spell the full string as it appears in the CSV.
+
+### 11.1 Refund Details.csv (`refund details.csv`)
+
+**Source:** Your export, **13 columns**, left-to-right. Spreadsheet column titles were **width-truncated** in the UI; the authoritative strings are **row 1 of the CSV file** — paste that line into the block below when you want this doc to match byte-for-byte.
+
+**Exact header row (paste from CSV):**
+
+```text
+(TODO: paste comma-separated header line from Refund Details.csv)
+```
+
+**Column order as visible in your sheet (truncated labels → full names not assumed beyond obvious matches):**
+
+| # | Visible in sheet | Notes |
+|---|------------------|--------|
+| 1 | Creation D… | **Creation Date** |
+| 2 | Currency | |
+| 3 | Direct D… | Full header not read from CSV here |
+| 4 | Disbursem… | Full header not read from CSV here |
+| 5 | Order ID | |
+| 6 | Payment S… | Full header not read from CSV here |
+| 7 | Quantity | |
+| 8 | Refund Am… | **Refund Amount** |
+| 9 | Refund Da… | **Refund Date** |
+| 10 | Reversal A… | Full header not read from CSV here |
+| 11 | Reversal R… | Full header not read from CSV here |
+| 12 | Reversal S… | Full header not read from CSV here |
+| 13 | Website | |
+
+**No Contract ID column** in this layout. Legacy-return dedup still uses sheet **Metadata** / **Full Description** (§4).
+
+**Process:** Prefer **asking you** or reading **§11** / the CSV over guessing Amazon’s column strings when implementing or reviewing mappings.
+
+---
+
+## 12. Troubleshooting: blank Date / Date Added / Week
 
 Imports resolve **Transactions** columns with **`amzGetTillerColumnIndex_`**: exact header match to the AMZ Import **Tiller label**, then **case-insensitive** fallback. **`amzValidateTransactionsImportColumns_`** fails the run early if any required written field (Date, Date Added, Month, Week, Description, etc.) does not map to a header—a missing **“Date Added”** or **“Week”** header that only differs by casing from the label used to resolve **Month** is a common cause of **Month filled but date cells empty** (values were assigned to a non-dense array index and never reached `setValues`).
 
@@ -222,4 +263,4 @@ If one pipeline (e.g. Order History) looks wrong and another (digital or refund)
 
 ---
 
-*Document reflects `amazonorders.gs` and `AmazonOrdersSidebar.html` as implemented. Update this file when behavior changes.*
+*Document reflects `amazonorders.gs` and `AmazonOrdersSidebar.html` as implemented. Update this file when behavior changes; **§11** when Amazon changes export shapes.*
