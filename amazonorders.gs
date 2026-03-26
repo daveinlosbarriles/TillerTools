@@ -276,7 +276,7 @@ function amzFormatPhysicalRefundDescription_() {
   return "[AMZ]  Refund";
 }
 
-/** Full Description includes Order ID (short Description does not). */
+/** Refund main-row text: `[AMZ]  Refund Order ID {id}`. Used for both Description and Full Description on import. */
 function amzFormatPhysicalRefundFullDescription_(orderId) {
   const oid = String(orderId == null ? "" : orderId).trim();
   return amzFormatPhysicalRefundDescription_() + " Order ID " + oid;
@@ -3106,13 +3106,8 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     const month = Utilities.formatDate(orderDate, Session.getScriptTimeZone(), "yyyy-MM");
     const week = amzGetWeekStartDate(orderDate);
     const rowOut = new Array(numCols).fill("");
-    amzSetRowDescriptionFields_(
-      rowOut,
-      tillerCols,
-      tillerLabels,
-      amzFormatPhysicalRefundDescription_(),
-      amzFormatPhysicalRefundFullDescription_(orderID)
-    );
+    const refundDescLine = amzFormatPhysicalRefundFullDescription_(orderID);
+    amzSetRowDescriptionFields_(rowOut, tillerCols, tillerLabels, refundDescLine, refundDescLine);
     rowOut[ciRd.DATE - 1] = orderDate;
     rowOut[ciRd.AMOUNT - 1] = amount;
     rowOut[ciRd.TRANSACTION_ID - 1] = amzGenerateGuid();
