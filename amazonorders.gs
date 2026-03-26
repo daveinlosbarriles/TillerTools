@@ -1106,6 +1106,42 @@ function amzGetWeekStartDate(date) {
   return d;
 }
 
+/**
+ * Google Sheets / Excel serial date (days since 1899-12-30) for calendar Y-M-D in the script timezone.
+ * Some layouts coerce {@code setValues(Date)} to empty in Date/Week columns while numbers and Month strings persist.
+ * @param {Date} d
+ * @returns {number|string} serial, or "" if invalid
+ */
+function amzSheetsDateSerial_(d) {
+  if (!(d instanceof Date) || isNaN(d.getTime())) return "";
+  const tz = Session.getScriptTimeZone();
+  const y = Number(Utilities.formatDate(d, tz, "yyyy"));
+  const mo = Number(Utilities.formatDate(d, tz, "M"));
+  const da = Number(Utilities.formatDate(d, tz, "d"));
+  const anchor = new Date(1899, 11, 30);
+  anchor.setHours(0, 0, 0, 0);
+  const cal = new Date(y, mo - 1, da);
+  cal.setHours(0, 0, 0, 0);
+  return (cal.getTime() - anchor.getTime()) / 86400000;
+}
+
+/**
+ * Replace Date instances in Date and Week columns with sheet serials before {@code setValues}.
+ * @param {Array<Array<*>>} padded
+ * @param {Object} ci - {@link amzWrittenTillerIndices_} (DATE, WEEK 1-based)
+ */
+function amzCoercePaddedRowsDateWeekToSerial_(padded, ci) {
+  if (!padded || !ci || typeof ci.DATE !== "number" || typeof ci.WEEK !== "number") return;
+  const di = ci.DATE - 1;
+  const wi = ci.WEEK - 1;
+  for (let r = 0; r < padded.length; r++) {
+    const row = padded[r];
+    if (!row) continue;
+    if (row[di] instanceof Date && !isNaN(row[di].getTime())) row[di] = amzSheetsDateSerial_(row[di]);
+    if (row[wi] instanceof Date && !isNaN(row[wi].getTime())) row[wi] = amzSheetsDateSerial_(row[wi]);
+  }
+}
+
 /** Ensure row-1 header scan spans all Tiller columns even if getLastColumn() is temporarily narrow. */
 const AMZ_TRANSACTIONS_HEADER_MIN_COLS = 40;
 
@@ -2537,6 +2573,7 @@ function importAmazonRecent(csvText, months, options) {
     );
   }
   const padded = amzPadRowsToWriteCols(rowsToWrite, writeCols);
+  amzCoercePaddedRowsDateWeekToSerial_(padded, ci);
 
   // #region agent log
   (function amzDebugImportWriteRow0_() {
@@ -2561,7 +2598,8 @@ function importAmazonRecent(csvText, months, options) {
         typeof dv +
         " isDate=" +
         (dv instanceof Date) +
-        (dv instanceof Date && !isNaN(dv.getTime()) ? " time=" + dv.getTime() : "")
+        (dv instanceof Date && !isNaN(dv.getTime()) ? " time=" + dv.getTime() : "") +
+        (typeof dv === "number" ? " serial=" + dv : "")
     );
     timing.push(
       "Server: DEBUG H2_preWrite WEEK_idx1b=" +
@@ -2570,7 +2608,8 @@ function importAmazonRecent(csvText, months, options) {
         typeof wv +
         " isDate=" +
         (wv instanceof Date) +
-        (wv instanceof Date && !isNaN(wv.getTime()) ? " time=" + wv.getTime() : "")
+        (wv instanceof Date && !isNaN(wv.getTime()) ? " time=" + wv.getTime() : "") +
+        (typeof wv === "number" ? " serial=" + wv : "")
     );
     timing.push(
       "Server: DEBUG H3_preWrite MONTH_idx1b=" +
@@ -2598,7 +2637,9 @@ function importAmazonRecent(csvText, months, options) {
     const dLabel =
       d instanceof Date
         ? "Date isDate=" + !isNaN(d.getTime())
-        : "type=" + typeof d + (d != null ? " valLen=" + String(d).length : "");
+        : typeof d === "number"
+          ? "type=number serial=" + d
+          : "type=" + typeof d + (d != null ? " valLen=" + String(d).length : "");
     timing.push("Server: post-write first row Date column — " + dLabel);
     let f = "";
     try {
@@ -2918,6 +2959,7 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
     );
   }
   const padded = amzPadRowsToWriteCols(rowsToWrite, writeCols);
+  amzCoercePaddedRowsDateWeekToSerial_(padded, ciDr);
   sheet.getRange(startRow, 1, padded.length, writeCols).setValues(padded);
   SpreadsheetApp.flush();
 
@@ -3269,6 +3311,7 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     );
   }
   const padded = amzPadRowsToWriteCols(rowsToWrite, writeCols);
+  amzCoercePaddedRowsDateWeekToSerial_(padded, ciRd);
   sheet.getRange(startRow, 1, padded.length, writeCols).setValues(padded);
   SpreadsheetApp.flush();
 
