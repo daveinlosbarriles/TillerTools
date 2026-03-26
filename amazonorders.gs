@@ -871,6 +871,20 @@ function amzPaymentTypeHasRow(paymentAccounts, paymentTypeFromCsv) {
   return amzLookupPaymentAccountRow(paymentAccounts, paymentTypeFromCsv) != null;
 }
 
+/**
+ * ZIP / sidebar imports require a real category name for offset rows; empty means the user left the
+ * "-- Select Value --" placeholder.
+ * @param {*} offsetCategoryRaw - {@code payload.offsetCategory} / bundle field
+ * @returns {string|null} error message, or null if ok
+ */
+function amzValidateBundleOffsetCategory_(offsetCategoryRaw) {
+  const s = offsetCategoryRaw != null ? String(offsetCategoryRaw).trim() : "";
+  if (!s) {
+    return 'Select a Category for offsets from the dropdown ("-- Select Value --" is not valid).';
+  }
+  return null;
+}
+
 /** Category names from Categories sheet column A (header row 1 = "Category"). */
 function amzGetCategoriesListForSidebar() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -3353,6 +3367,10 @@ function importAmazonBundleChunk(payloadJson) {
     throw new Error("Invalid import chunk payload.");
   }
   const step = String(payload.step || "").trim();
+  if (step !== "finalize") {
+    const catErr = amzValidateBundleOffsetCategory_(payload.offsetCategory);
+    if (catErr) throw new Error(catErr);
+  }
   let ts = "";
   const rawTs = payload.bundleImportTimestampIso;
   if (rawTs != null && rawTs !== "") {
@@ -3440,6 +3458,9 @@ function importAmazonBundle(bundleJson) {
   } catch (e) {
     return "Error: invalid import bundle.";
   }
+
+  const catErr0 = amzValidateBundleOffsetCategory_(bundle.offsetCategory);
+  if (catErr0) return "Error: " + catErr0;
 
   const bundleStarted = new Date();
   const bundleImportTimestampIso = Utilities.formatDate(

@@ -197,13 +197,13 @@
       <div class="main-col">
         <div class="inline-field-line">
           <label for="offsetCat">Category for offsets</label>
-          <select id="offsetCat"><option value="">— Uncategorized —</option></select>
+          <select id="offsetCat"><option value="">-- Select Value --</option></select>
         </div>
       </div>
       <button type="button" class="help-toggle help-toggle-nudge-category" aria-label="Help" data-help="helpCat">?</button>
     </div>
     <div id="helpCat" class="help-panel">
-      <p>Suggest creating a category “Amazon”, and assign all offsets to that category. Then excluding that category from reporting.</p>
+      <p>You must choose a category (not “-- Select Value --”). Suggest creating a category “Amazon”, and assign all offsets to that category. Then excluding that category from reporting.</p>
       <p>Also, all of your credit card transactions on Amazon orders should also be set to “Amazon.” This way, they cancel each other out, are both excluded from reporting, and you are only reporting on the specific items you bought, and the categories you assigned to them.</p>
       <p>Note that we have to create offsets when importing your spending, to avoid counting that spending twice – first with your credit card transaction, and then again with the Amazon imported transaction.</p>
     </div>
@@ -480,6 +480,16 @@
 
         if (!steps.length) {
           log("No import steps were run. Select at least one order type and ensure the ZIP contains the matching CSV(s).");
+          $("panelStatus").scrollIntoView({ behavior: "smooth", block: "nearest" });
+          $("btnStartOver").style.display = "inline-block";
+          return;
+        }
+
+        var catVal = $("offsetCat") && $("offsetCat").value != null ? String($("offsetCat").value).trim() : "";
+        if (!catVal) {
+          log(
+            'Select a Category for offsets from the list. "-- Select Value --" is not valid (offsets must be categorized).'
+          );
           $("panelStatus").scrollIntoView({ behavior: "smooth", block: "nearest" });
           $("btnStartOver").style.display = "inline-block";
           return;
