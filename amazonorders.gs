@@ -1107,8 +1107,14 @@ function amzGetWeekStartDate(date) {
 }
 
 /**
- * Google Sheets / Excel serial date (days since 1899-12-30) for calendar Y-M-D in the script timezone.
- * Some layouts coerce {@code setValues(Date)} to empty in Date/Week columns while numbers and Month strings persist.
+ * Google Sheets / Excel serial date (days since 1899-12-30) for local calendar Y/M/D in {@link Session#getScriptTimeZone}.
+ *
+ * Why not pass JS Date into {@code Range#setValues}? On some Transactions sheets the Date and Week columns are
+ * formatted or treated such that {@code setValues} with a Date leaves the cell empty on readback, while Amount
+ * (number) and Month ({@code Utilities.formatDate} string) still write. Serial numbers persist and display as
+ * dates when the column format allows; {@code amzCoercePaddedRowsDateWeekToSerial_} runs immediately before each
+ * transaction-batch {@code setValues}.
+ *
  * @param {Date} d
  * @returns {number|string} serial, or "" if invalid
  */
@@ -1126,7 +1132,8 @@ function amzSheetsDateSerial_(d) {
 }
 
 /**
- * Replace Date instances in Date and Week columns with sheet serials before {@code setValues}.
+ * Replaces Date instances at the Date and Week column indices with {@link amzSheetsDateSerial_} values in-place,
+ * so import batches survive sheets where native Date values would otherwise store as blank (see {@code amzSheetsDateSerial_}).
  * @param {Array<Array<*>>} padded
  * @param {Object} ci - {@link amzWrittenTillerIndices_} (DATE, WEEK 1-based)
  */
@@ -2573,54 +2580,7 @@ function importAmazonRecent(csvText, months, options) {
     );
   }
   const padded = amzPadRowsToWriteCols(rowsToWrite, writeCols);
-  amzCoercePaddedRowsDateWeekToSerial_(padded, ci);
-
-  // #region agent log
-  (function amzDebugImportWriteRow0_() {
-    const r0 = padded[0];
-    if (!r0 || !ci) return;
-    const di = ci.DATE - 1;
-    const wi = ci.WEEK - 1;
-    const mi = ci.MONTH - 1;
-    const dv = r0[di];
-    const wv = r0[wi];
-    const mv = r0[mi];
-    timing.push(
-      "Server: DEBUG H1_preWrite row0 startRow=" +
-        startRow +
-        " writeCols=" +
-        writeCols +
-        " len=" +
-        r0.length +
-        " DATE_idx1b=" +
-        ci.DATE +
-        " val_type=" +
-        typeof dv +
-        " isDate=" +
-        (dv instanceof Date) +
-        (dv instanceof Date && !isNaN(dv.getTime()) ? " time=" + dv.getTime() : "") +
-        (typeof dv === "number" ? " serial=" + dv : "")
-    );
-    timing.push(
-      "Server: DEBUG H2_preWrite WEEK_idx1b=" +
-        ci.WEEK +
-        " val_type=" +
-        typeof wv +
-        " isDate=" +
-        (wv instanceof Date) +
-        (wv instanceof Date && !isNaN(wv.getTime()) ? " time=" + wv.getTime() : "") +
-        (typeof wv === "number" ? " serial=" + wv : "")
-    );
-    timing.push(
-      "Server: DEBUG H3_preWrite MONTH_idx1b=" +
-        ci.MONTH +
-        " val_type=" +
-        typeof mv +
-        " sample=" +
-        String(mv).slice(0, 14)
-    );
-  })();
-  // #endregion
+  amzCoercePaddedRowsDateWeekToSerial_(padded, ci); /* see amzSheetsDateSerial_ */
 
   sheet.getRange(startRow, 1, padded.length, writeCols).setValues(padded);
   SpreadsheetApp.flush();
@@ -2641,22 +2601,6 @@ function importAmazonRecent(csvText, months, options) {
           ? "type=number serial=" + d
           : "type=" + typeof d + (d != null ? " valLen=" + String(d).length : "");
     timing.push("Server: post-write first row Date column — " + dLabel);
-    let f = "";
-    try {
-      f = sheet.getRange(startRow, ci.DATE).getFormula() || "";
-    } catch (eF) {
-      f = "?";
-    }
-    timing.push(
-      "Server: DEBUG H5_postWrite Date col formulaLen=" + String(f).length + (f ? " prefix=" + String(f).slice(0, 25) : "")
-    );
-    const headN = Math.min(8, writeCols);
-    const head = sheet.getRange(startRow, 1, 1, headN).getValues()[0];
-    const types = [];
-    for (let hi = 0; hi < head.length; hi++) {
-      types.push(head[hi] instanceof Date ? "Date" : typeof head[hi]);
-    }
-    timing.push("Server: DEBUG H4_postWrite cells1_to_" + headN + "_types=" + types.join(","));
   } catch (eRw) {
     timing.push("Server: post-write readback Date: " + (eRw.message || String(eRw)));
   }
@@ -2959,7 +2903,7 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
     );
   }
   const padded = amzPadRowsToWriteCols(rowsToWrite, writeCols);
-  amzCoercePaddedRowsDateWeekToSerial_(padded, ciDr);
+  amzCoercePaddedRowsDateWeekToSerial_(padded, ciDr); /* see amzSheetsDateSerial_ */
   sheet.getRange(startRow, 1, padded.length, writeCols).setValues(padded);
   SpreadsheetApp.flush();
 
@@ -3311,7 +3255,7 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     );
   }
   const padded = amzPadRowsToWriteCols(rowsToWrite, writeCols);
-  amzCoercePaddedRowsDateWeekToSerial_(padded, ciRd);
+  amzCoercePaddedRowsDateWeekToSerial_(padded, ciRd); /* see amzSheetsDateSerial_ */
   sheet.getRange(startRow, 1, padded.length, writeCols).setValues(padded);
   SpreadsheetApp.flush();
 
