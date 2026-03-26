@@ -136,7 +136,7 @@ Refund CSVs don’t always include the same payment info as Order History. When 
 
 - Optional **Digital Content Orders** CSV → `amzOrderIdToPaymentStringMapFromCsv` in digital mode; else **Use for Digital** account from **AMZ Import**.
 
-**Column names** for refund/return files come from **AMZ Import** unified map (`amzGetSourceMapHeader`, `refund details.csv` / `digital returns.csv`) with fallbacks to Amazon defaults. **Observed Amazon headers** for this file are listed in **§11** so maintainers need not infer layout from screenshots each time.
+**Column names** for refund/return files come from **AMZ Import** unified map (`amzGetSourceMapHeader`, `refund details.csv` / `digital returns.csv`) with fallbacks to Amazon defaults. **Observed Amazon headers** for **Refund Details** and **Order History** are listed in **§11.1** / **§11.2** so maintainers need not infer layout from screenshots each time.
 
 ---
 
