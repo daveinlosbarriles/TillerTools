@@ -136,7 +136,7 @@ Refund CSVs don’t always include the same payment info as Order History. When 
 
 - Optional **Digital Content Orders** CSV → `amzOrderIdToPaymentStringMapFromCsv` in digital mode; else **Use for Digital** account from **AMZ Import**.
 
-**Column names** for refund/return files come from **AMZ Import** unified map (`amzGetSourceMapHeader`, `refund details.csv` / `digital returns.csv`) with fallbacks to Amazon defaults. **Observed Amazon headers** for **Refund Details** and **Order History** are listed in **§11.1** / **§11.2** so maintainers need not infer layout from screenshots each time.
+**Column names** for refund/return files come from **AMZ Import** unified map (`amzGetSourceMapHeader`, `refund details.csv` / `digital returns.csv`) with fallbacks to Amazon defaults. **Observed Amazon headers** for **Refund Details**, **Order History**, and **Digital Content Orders** are listed in **§11.1**–**§11.3** so maintainers need not infer layout from screenshots each time.
 
 ---
 
@@ -215,7 +215,7 @@ Strings like **“Not Applicable”** fail `Date` parse → `null` → falls thr
 
 ## 11. Amazon data-export CSV reference (verified columns)
 
-This section records **actual column order** from Amazon **Request My Data** exports as verified in your sheet, so design and code assumptions stay grounded. **Update §11** when Amazon changes an export or you add Digital Content Orders / Digital returns tables here.
+This section records **actual column order** from Amazon **Request My Data** exports as verified in your sheet, so design and code assumptions stay grounded. **Update §11** when Amazon changes an export or you add a **Digital returns** table here.
 
 **How to extend:** Add a subsection per file with the **exact header row** (left-to-right). If a column name is ambiguous in the UI, spell the full string as it appears in the CSV.
 
@@ -269,6 +269,33 @@ Creation Date,Currency,Direct Debit,Disbursement Type,Order ID,Payment Status,Qu
 
 ```text
 ASIN,Billing Address,Carrier Name,Currency,Gift Message,Gift Recipient,Gift Sender,Item Serial Number,Order Date,Order ID,Order Status,Original Quantity,Payment Method Type,Product Condition,Product Name,Purchase Price,Ship Date,Shipment Item,Shipment Item,Shipment Status,Shipping Address,Shipping Charge,Shipping Option,Total Amount,Total Discount,Unit Price,Unit Price,Website
+```
+
+### 11.3 Digital Content Orders.csv (`digital content orders.csv`)
+
+**28 columns**, left-to-right. Headers match a **verified export / sheet view**; sample rows use typical Kindle-style values (abbreviate with `…` where the UI cut off text). **Digital Order IDs** use a **`D` prefix** (e.g. `D01-…`), unlike physical **Order History** IDs.
+
+**Digital Content Orders — column headers and sample rows**
+
+| Order Date | Order ID | Title | Category | ASIN | Website | Purchase Price Per Unit | Quantity | Payment Instrument Type | Purchase Date | Shipping Address Name | Shipping Address Street 1 | Shipping Address Street 2 | Shipping Address City | Shipping Address State | Shipping Address Zip | Order Status | Carrier Name & Tracking Number | Item Subtotal | Item Subtotal Tax | Item Total | Tax Exemption Applied | Tax Exemption Type | Exemption Opt-Out | Buyer Name | Currency | Group Name | Service Order |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| 03/12/2024 | D01-9928832-4410212 | Sample Kindle title one… | Kindle eBook | B0CQPY12AB | Amazon.com | 14.99 | 1 | Visa ****1234 | 03/12/2024 | | | | | | | Completed | | 13.89 | 1.1 | 14.99 | No | | | J. Reader… | USD | | |
+| 01/05/2023 | D01-1100293-8839201 | Sample Kindle title two… | Kindle eBook | B09XYZ1111 | Amazon.com | 0 | 1 | Mastercard ****9011 | 01/05/2023 | | | | | | | Completed | | 0 | 0 | 0 | No | | | J. Reader… | USD | | |
+| 11/28/2025 | D01-5566012-2291034 | Sample digital order three… | Kindle eBook | B0ABCDEFGH | Amazon.com | 9.99 | 1 | Amex ****1005 | 11/28/2025 | | | | | | | Completed | | 9.2 | 0.79 | 9.99 | No | | | J. Reader… | USD | | |
+
+*Sample numeric splits (subtotal / tax / total) and IDs are **illustrative**; replace with pasted CSV lines for a byte-for-byte archive.*
+
+**Observed details**
+
+- **Dates** in this export use **`MM/DD/YYYY`** (contrast **Order History** / **Refund Details**, which often use `YYYY-MM-D` in the same data-request bundle). Parsing must accept both shapes (`amzParseAmazonCsvDateLoose_` and related).
+- **Order ID** + **ASIN** (and aggregated per-order metadata with **`lineItemCount`** for digital) drive importer dedup and **Full Description** patterns (`[AMZD] ` prefix); legacy physical Full Description scan intentionally skips digital lines (§4).
+- **Shipping address** columns exist in the file but are typically **empty** for digital goods; **Carrier Name & Tracking** is usually blank.
+- **Title** is the product name used in descriptions alongside **ASIN**.
+
+**Header row as comma-separated:**
+
+```text
+Order Date,Order ID,Title,Category,ASIN,Website,Purchase Price Per Unit,Quantity,Payment Instrument Type,Purchase Date,Shipping Address Name,Shipping Address Street 1,Shipping Address Street 2,Shipping Address City,Shipping Address State,Shipping Address Zip,Order Status,Carrier Name & Tracking Number,Item Subtotal,Item Subtotal Tax,Item Total,Tax Exemption Applied,Tax Exemption Type,Exemption Opt-Out,Buyer Name,Currency,Group Name,Service Order
 ```
 
 ---
