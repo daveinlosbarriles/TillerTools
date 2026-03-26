@@ -159,6 +159,8 @@ The **AMZ Import** tab holds all routing. **First run** creates it with defaults
 
 If a payment type is missing, add a payment row with the **exact** Amazon string.
 
+For additional details on functionality and code, refer to the [Design Details](designdetails.md) document.
+
 ---
 
 ## Tiller Quick Search — key features
