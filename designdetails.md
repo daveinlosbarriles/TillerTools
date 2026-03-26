@@ -79,16 +79,23 @@ Configuration is read by `readAmzImportConfig` and validated by `validateAmzImpo
 
 ## 4. Duplicate detection (existing sheet + new import)
 
-Re-importing the same Amazon rows should not create duplicates. The importer builds a set of **stable keys** from existing rows’ **Metadata** JSON (not from Description, which people edit). Each new row is checked against that set before append.
+Re-importing the same Amazon rows should not create duplicates. The importer builds a **stable key** set from existing sheet rows before appending.
 
-**Principle:** Dedup keys are derived from **Metadata** JSON’s `amazon` object, not from **Full Description** (users may edit descriptions).
+**Sources:**
+
+1. **Metadata** JSON — preferred when present; `amzAppendDuplicateKeysFromTransactions_` reads the column through `amzGetLastTransactionDataRow`; `amzAddDuplicateKeysFromImportMetadataCell_` parses and calls `amzAddDedupKeysForAmazonMeta_`.
+2. **Full Description** — for **legacy** Tiller Amazon imports that never wrote Metadata but did write Full Description: `amzAppendLegacyDuplicateKeysFromFullDescription_` parses **physical** purchase lines (`Amazon Order ID …:` and `[AMZ]  Order ID …:`) and **return** lines (`… with Contract ID {uuid}`). Lines starting with **`[AMZD]`** are skipped (legacy had no digital orders; digital dedup stays on Metadata / importer keys). **Numeric ISBN-style** tokens in the trailing `(…)` are normalized (e.g. 9- vs 10-digit) so old and new rows match.
+
+**Principle:** Prefer Metadata; Full Description is only used so legacy sheets without Metadata still dedupe. Edited descriptions can theoretically cause false positives; patterns are strict (Amazon order id prefixes and final parenthetical for purchases).
 
 **Before import:**
 
 - `amzGetLastTransactionDataRow` — last row with a **Date** (not merely “last row”).
-- `amzAppendDuplicateKeysFromTransactions_` — reads Metadata column down to that row; `amzAddDuplicateKeysFromImportMetadataCell_` parses JSON and calls `amzAddDedupKeysForAmazonMeta_`.
+- `amzAppendDuplicateKeysFromTransactions_` and `amzAppendLegacyDuplicateKeysFromFullDescription_`.
 
-**Key shapes (by `amazon.type`):** e.g. `physical-purchase-line|orderId|ASIN`, `digital-purchase|orderId`, `refund-detail|orderId|amount`, `digital-return|orderId|asin`, plus `*-offset` types — see `amzAddDedupKeysForAmazonMeta_`.
+**Key shapes (by `amazon.type` and patterns):** e.g. `physical-purchase-line|orderId|normalizedAsinOrIsbn`, `digital-purchase|orderId`, `refund-detail|orderId|amount`, `legacy-return|orderId|contractId` (from metadata `type: "return"` or Full Description), `digital-return|orderId|asin`, plus `*-offset` types — see `amzAddDedupKeysForAmazonMeta_` and `amzAddDedupKeysFromFullDescriptionLine_`.
+
+**Orders returns:** If **Refund Details** maps an optional **Contract ID** column and the file includes it, import also treats `legacy-return|…` as a duplicate key (for rows already imported under the older return metadata / description shape).
 
 **During import:**
 

@@ -167,11 +167,13 @@ function amzGetDefaultUnifiedCsvMapRows_() {
   rows.push([RD, "Website", "Website", ""]);
   rows.push([RD, "Refund Date", "Refund Date", ""]);
   rows.push([RD, "Creation Date", "Creation Date", ""]);
+  rows.push([RD, "Contract ID", "Contract ID", ""]);
   rows.push(["Returns.csv", "Order ID", "Order ID", ""]);
   rows.push(["Returns.csv", "Refund Amount", "Refund Amount", ""]);
   rows.push(["Returns.csv", "Website", "Website", ""]);
   rows.push(["Returns.csv", "Refund Date", "Refund Date", ""]);
   rows.push(["Returns.csv", "Creation Date", "Creation Date", ""]);
+  rows.push(["Returns.csv", "Contract ID", "Contract ID", ""]);
   rows.push([DR, "ASIN", "ASIN", ""]);
   rows.push([DR, "Order ID", "Order ID", ""]);
   rows.push([DR, "Return Date", "Return Date", ""]);
@@ -1444,11 +1446,99 @@ function amzAppendDuplicateKeysFromTransactions_(sheet, tillerCols, tillerLabels
 }
 
 /**
+ * Last parenthetical on a line — Amazon full descriptions put ASIN/ISBN in the final "(…)".
+ * @param {string} s
+ * @returns {string}
+ */
+function amzLastParenToken_(s) {
+  const str = String(s || "");
+  const open = str.lastIndexOf("(");
+  const close = str.lastIndexOf(")");
+  if (open < 0 || close <= open) return "";
+  return str.substring(open + 1, close).trim();
+}
+
+/**
+ * Dedup keys from Full Description for legacy rows where Metadata was never filled.
+ * Physical: legacy {@code Amazon Order ID …: … (token)} or current {@code [AMZ]  Order ID …: … (token)}.
+ * Skips lines starting with {@code [AMZD]} (legacy importer had no digital orders).
+ * Returns: {@code Amazon Order ID … with Contract ID …}.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {Object} tillerCols
+ * @param {Object} tillerLabels
+ * @param {number} lastDataRow
+ * @param {Set<string>} existingSet
+ */
+function amzAppendLegacyDuplicateKeysFromFullDescription_(sheet, tillerCols, tillerLabels, lastDataRow, existingSet) {
+  if (lastDataRow < 2) return;
+  const fdCol = amzGetTillerColumnIndex_(tillerCols, tillerLabels.FULL_DESCRIPTION);
+  if (!fdCol) return;
+  const vals = sheet.getRange(2, fdCol, lastDataRow, 1).getValues();
+  for (let j = 0; j < vals.length; j++) {
+    amzAddDedupKeysFromFullDescriptionLine_(vals[j][0], existingSet);
+  }
+}
+
+/**
+ * @param {*} lineValue
+ * @param {Set<string>} existingSet
+ */
+function amzAddDedupKeysFromFullDescriptionLine_(lineValue, existingSet) {
+  if (lineValue == null || lineValue === "") return;
+  const t = String(lineValue).trim();
+  if (!t) return;
+  if (/^\[AMZD\]/i.test(t)) return;
+
+  const mRet = t.match(/Amazon Order ID\s+([\d-]+)\s+with Contract ID\s+([0-9a-fA-F-]{36})/i);
+  if (mRet) {
+    const oid = mRet[1].trim();
+    const cid = mRet[2].trim().toLowerCase();
+    if (oid && cid) existingSet.add("legacy-return|" + oid + "|" + cid);
+    return;
+  }
+
+  let m = t.match(/^\[AMZ\]\s+Order ID\s+([\d-]+)\s*:\s*(.+)$/);
+  if (m) {
+    const token = amzLastParenToken_(m[2]);
+    if (token) {
+      const norm = amzNormalizePurchaseDedupToken_(token);
+      if (norm) existingSet.add("physical-purchase-line|" + m[1].trim() + "|" + norm);
+    }
+    return;
+  }
+
+  m = t.match(/^Amazon Order ID\s+([\d-]+)\s*:\s*(.+)$/);
+  if (m) {
+    const token = amzLastParenToken_(m[2]);
+    if (token) {
+      const norm = amzNormalizePurchaseDedupToken_(token);
+      if (norm) existingSet.add("physical-purchase-line|" + m[1].trim() + "|" + norm);
+    }
+  }
+}
+
+/**
  * @param {string} s
  * @returns {string}
  */
 function amzNormalizeAsinDedupKey_(s) {
   return String(s || "").trim().toUpperCase();
+}
+
+/**
+ * Normalizes ASIN/ISBN token for physical line-item dedup (matches import + Metadata + Full Description scan).
+ * All-numeric tokens of length at most 10 are left-padded to ISBN-10 width so legacy vs new imports align.
+ * @param {string} s
+ * @returns {string}
+ */
+function amzNormalizePurchaseDedupToken_(s) {
+  const raw = String(s == null ? "" : s).trim();
+  if (!raw) return "";
+  if (/^\d+$/.test(raw)) {
+    if (raw.length <= 10) return raw.padStart(10, "0");
+    return raw;
+  }
+  return raw.toUpperCase();
 }
 
 /**
@@ -1463,6 +1553,18 @@ function amzAddDedupKeysForAmazonMeta_(amz, setObj) {
     const amt = Number(amz.refundAmount);
     const amtKey = isNaN(amt) ? String(amz.refundAmount) : amt.toFixed(2);
     setObj.add("refund-detail|" + String(amz.orderId).trim() + "|" + amtKey);
+    return;
+  }
+  if (t === "return" && amz.id != null) {
+    const oid = String(amz.id).trim();
+    const cidRaw =
+      amz["contract-id"] != null
+        ? String(amz["contract-id"]).trim()
+        : amz.contractId != null
+          ? String(amz.contractId).trim()
+          : "";
+    const cid = cidRaw.toLowerCase();
+    if (oid && cid) setObj.add("legacy-return|" + oid + "|" + cid);
     return;
   }
   if (t === "digital-return" && amz.id != null) {
@@ -1502,7 +1604,7 @@ function amzAddDedupKeysForAmazonMeta_(amz, setObj) {
       return;
     }
     const lineAsin = amz.isbn != null && String(amz.isbn).trim() !== "" ? amz.isbn : amz.asin;
-    const asinK = amzNormalizeAsinDedupKey_(lineAsin);
+    const asinK = amzNormalizePurchaseDedupToken_(lineAsin);
     setObj.add("physical-purchase-line|" + oid + "|" + asinK);
   }
 }
@@ -2108,9 +2210,10 @@ function importAmazonRecent(csvText, months, options) {
   const existingFullDescSet = new Set();
   const tDupStart = Date.now();
   amzAppendDuplicateKeysFromTransactions_(sheet, tillerCols, tillerLabels, lastDataRow, existingFullDescSet);
+  amzAppendLegacyDuplicateKeysFromFullDescription_(sheet, tillerCols, tillerLabels, lastDataRow, existingFullDescSet);
   const tDupEnd = Date.now();
   timing.push(
-    "Server: scan Metadata for dedup keys (" +
+    "Server: scan Metadata + Full Description for dedup keys (" +
     existingFullDescSet.size + " entries): " +
     ((tDupEnd - tDupStart) / 1000).toFixed(2) + " s"
   );
@@ -2317,8 +2420,8 @@ function importAmazonRecent(csvText, months, options) {
         continue;
       }
 
-      const dupKeyPurchase =
-        "physical-purchase-line|" + oidTrim + "|" + amzNormalizeAsinDedupKey_(asin);
+      const tokenK = amzNormalizePurchaseDedupToken_(asin);
+      const dupKeyPurchase = "physical-purchase-line|" + oidTrim + "|" + tokenK;
 
       if (existingFullDescSet.has(dupKeyPurchase)) {
         duplicateCount += 1;
@@ -2569,6 +2672,7 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
   const lastDataRow = amzGetLastTransactionDataRow(sheet, tillerCols, tillerLabels);
   const existingFullDescSet = new Set();
   amzAppendDuplicateKeysFromTransactions_(sheet, tillerCols, tillerLabels, lastDataRow, existingFullDescSet);
+  amzAppendLegacyDuplicateKeysFromFullDescription_(sheet, tillerCols, tillerLabels, lastDataRow, existingFullDescSet);
 
   const groups = {};
   const skipRowDump = { n: 0 };
@@ -2839,6 +2943,9 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
   const websiteCol = amzGetSourceMapHeader(config, RD, "Website") || "Website";
   const refundDateCol = amzGetSourceMapHeader(config, RD, "Refund Date") || "Refund Date";
   const creationDateCol = amzGetSourceMapHeader(config, RD, "Creation Date") || "Creation Date";
+  const contractIdHeader = amzGetSourceMapHeader(config, RD, "Contract ID");
+  const contractIdCol =
+    contractIdHeader && col[contractIdHeader] !== undefined ? contractIdHeader : null;
 
   const needCore = [orderIdCol, refundAmountCol, websiteCol];
   for (let n = 0; n < needCore.length; n++) {
@@ -2862,6 +2969,7 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
   const lastDataRow = amzGetLastTransactionDataRow(sheet, tillerCols, tillerLabels);
   const existingFullDescSet = new Set();
   amzAppendDuplicateKeysFromTransactions_(sheet, tillerCols, tillerLabels, lastDataRow, existingFullDescSet);
+  amzAppendLegacyDuplicateKeysFromFullDescription_(sheet, tillerCols, tillerLabels, lastDataRow, existingFullDescSet);
 
   const groups = {};
   const skipRowDump = { n: 0 };
@@ -2965,6 +3073,23 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
       duplicateCount += 1;
       continue;
     }
+    if (contractIdCol) {
+      let hitLegacy = false;
+      const seenLegacyC = {};
+      for (let jc = 0; jc < rows.length; jc++) {
+        const cid = String(rows[jc][col[contractIdCol]] == null ? "" : rows[jc][col[contractIdCol]]).trim().toLowerCase();
+        if (!cid || seenLegacyC[cid]) continue;
+        seenLegacyC[cid] = 1;
+        if (existingFullDescSet.has("legacy-return|" + oidStr + "|" + cid)) {
+          hitLegacy = true;
+          break;
+        }
+      }
+      if (hitLegacy) {
+        duplicateCount += 1;
+        continue;
+      }
+    }
 
     const amazonMeta = {
       orderId: String(orderID),
@@ -3001,6 +3126,15 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     rowOut[ciRd.METADATA - 1] = metadataValue;
     output.push(rowOut);
     existingFullDescSet.add(dupKeyRefund);
+    if (contractIdCol) {
+      const seenOutC = {};
+      for (let jo = 0; jo < rows.length; jo++) {
+        const cid = String(rows[jo][col[contractIdCol]] == null ? "" : rows[jo][col[contractIdCol]]).trim().toLowerCase();
+        if (!cid || seenOutC[cid]) continue;
+        seenOutC[cid] = 1;
+        existingFullDescSet.add("legacy-return|" + oidStr + "|" + cid);
+      }
+    }
 
     const oidKey = oidStr;
     if (!perOrderOffset[oidKey]) {
