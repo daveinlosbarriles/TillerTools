@@ -21,7 +21,7 @@ This document explains how the **ZIP sidebar** (`AmazonOrdersSidebar.html`) and 
 
 ## 1. Loading and parsing one file at a time (payload size)
 
-**In plain English:** Google’s **Apps Script** limits how much data one browser→server call can carry. Instead of uploading the whole ZIP in one shot, the sidebar sends **one CSV pipeline at a time** (orders, digital orders, digital returns, refunds), then a final **“finalize”** step to sort and filter the sheet. That keeps each request smaller and more reliable.
+Google’s **Apps Script** limits how much data one browser→server call can carry. Instead of uploading the whole ZIP in one shot, the sidebar sends **one CSV pipeline at a time** (orders, digital orders, digital returns, refunds), then a final **“finalize”** step to sort and filter the sheet. That keeps each request smaller and more reliable.
 
 **Goal:** Keep each `google.script.run` RPC under Apps Script limits by not sending the full ZIP as one giant argument.
 
@@ -42,7 +42,7 @@ This document explains how the **ZIP sidebar** (`AmazonOrdersSidebar.html`) and 
 
 ## 2. Trimming CSV by date before upload (payload size)
 
-**In plain English:** Even before data hits the server, the **browser** can drop old rows from the CSV text so the string passed to Apps Script is shorter. That does **not** replace the server’s own date rules—it’s an extra guardrail so huge histories don’t blow the payload limit. Refund/return files can be trimmed too when you set a cutoff.
+Even before data hits the server, the **browser** can drop old rows from the CSV text so the string passed to Apps Script is shorter. That does **not** replace the server’s own date rules—it’s an extra guardrail so huge histories don’t blow the payload limit. Refund/return files can be trimmed too when you set a cutoff.
 
 **Where:** Client only — `buildTransmitFiles` in `AmazonOrdersSidebar.html` uses **Papa Parse** to drop data rows **before** a minimum calendar date while keeping the header row.
 
@@ -63,7 +63,7 @@ This document explains how the **ZIP sidebar** (`AmazonOrdersSidebar.html`) and 
 
 ## 3. Constants from **AMZ Import** (sheet-driven config)
 
-**In plain English:** Almost everything that would break if Amazon or Tiller renamed a column is driven from the **AMZ Import** tab: payment strings → accounts, which CSV column means “Order Date,” and which **Transactions** header you use for Metadata. The script ships **defaults** only to populate a brand-new tab.
+Almost everything that would break if Amazon or Tiller renamed a column is driven from the **AMZ Import** tab: payment strings → accounts, which CSV column means “Order Date,” and which **Transactions** header you use for Metadata. The script ships **defaults** only to populate a brand-new tab.
 
 Configuration is read by `readAmzImportConfig` and validated by `validateAmzImportConfig`. Hard-coded **defaults** exist only to **seed** a new tab (`AMZ_IMPORT_DEFAULTS`, `getOrCreateAmzImportSheet`).
 
@@ -78,7 +78,7 @@ Configuration is read by `readAmzImportConfig` and validated by `validateAmzImpo
 
 ## 4. Duplicate detection (existing sheet + new import)
 
-**In plain English:** Re-importing the same Amazon rows should not create duplicates. The importer builds a set of **stable keys** from existing rows’ **Metadata** JSON (not from Description, which people edit). Each new row is checked against that set before append.
+Re-importing the same Amazon rows should not create duplicates. The importer builds a set of **stable keys** from existing rows’ **Metadata** JSON (not from Description, which people edit). Each new row is checked against that set before append.
 
 **Principle:** Dedup keys are derived from **Metadata** JSON’s `amazon` object, not from **Full Description** (users may edit descriptions).
 
@@ -98,7 +98,7 @@ Configuration is read by `readAmzImportConfig` and validated by `validateAmzImpo
 
 ## 5. Offset calculation (purchase / digital purchase)
 
-**In plain English:** For each Amazon **order**, line-item rows total to a net amount on **one side** of your books; the importer adds a single **offset row** per order so the other side (your card/bank) nets correctly in Tiller. If the script cannot resolve which Tiller account to use for that offset, it **still writes the offset** but leaves **Account** (and related fields) **blank** so you can fill them in manually—the row stays visible and paired with the order.
+For each Amazon **order**, line-item rows total to a net amount on **one side** of your books; the importer adds a single **offset row** per order so the other side (your card/bank) nets correctly in Tiller. If the script cannot resolve which Tiller account to use for that offset, it **still writes the offset** but leaves **Account** (and related fields) **blank** so you can fill them in manually—the row stays visible and paired with the order.
 
 **Where:** `importAmazonRecent` — **`perOrderOffset`** accumulates **per Order ID** the **sum of line amounts** (already sign-adjusted: purchases flow uses negative line amounts; offset uses **`Math.abs(total)`** for the balancing positive row).
 
@@ -115,7 +115,7 @@ Configuration is read by `readAmzImportConfig` and validated by `validateAmzImpo
 
 ## 6. Refund matching (payment and data joins)
 
-**In plain English:** Refund CSVs don’t always include the same payment info as Order History. When the ZIP includes **Order History** (or digital orders for digital returns), the server builds a **map from Order ID → payment string** so refund and return rows can pick the same Tiller account where possible.
+Refund CSVs don’t always include the same payment info as Order History. When the ZIP includes **Order History** (or digital orders for digital returns), the server builds a **map from Order ID → payment string** so refund and return rows can pick the same Tiller account where possible.
 
 **Orders returns (`importRefundDetailsCsv`):**
 
@@ -133,7 +133,7 @@ Configuration is read by `readAmzImportConfig` and validated by `validateAmzImpo
 
 ## 7. Payment types: extraction vs **AMZ Import** mappings
 
-**In plain English:** Before import, you can **review** which payment strings appear in your filtered Order History. The wizard compares them to rows on **AMZ Import** so you can add missing cards before money hits Transactions.
+Before import, you can **review** which payment strings appear in your filtered Order History. The wizard compares them to rows on **AMZ Import** so you can add missing cards before money hits Transactions.
 
 **Extraction (`analyzePaymentMethodsForOrderHistory`):**
 
@@ -152,7 +152,7 @@ Configuration is read by `readAmzImportConfig` and validated by `validateAmzImpo
 
 ## 8. Metadata fields: how CSV values become `amazon` JSON
 
-**In plain English:** The **Metadata** column stores a prefix plus JSON. The inner **`amazon`** object is built from the **CSV column map** on **AMZ Import**: each mapping row says which CSV header (or literal) fills which JSON key. That object drives dedup and downstream tooling.
+The **Metadata** column stores a prefix plus JSON. The inner **`amazon`** object is built from the **CSV column map** on **AMZ Import**: each mapping row says which CSV header (or literal) fills which JSON key. That object drives dedup and downstream tooling.
 
 **Driven by sheet:** Rows in the CSV map with a non-empty **Metadata field name** build `metadataMapping` (per-key standard vs digital column or literal).
 
@@ -170,7 +170,7 @@ Configuration is read by `readAmzImportConfig` and validated by `validateAmzImpo
 
 ## 9. Sort order and Metadata filter (why this approach)
 
-**In plain English:** After rows are appended, the sheet is sorted **newest date first** and a **filter** is applied on **Metadata** so you mostly see rows from **this import run**. The implementation removes any existing filter first, because sorting a filtered range can leave rows “stuck” in the wrong order on large sheets.
+After rows are appended, the sheet is sorted **newest date first** and a **filter** is applied on **Metadata** so you mostly see rows from **this import run**. The implementation removes any existing filter first, because sorting a filtered range can leave rows “stuck” in the wrong order on large sheets.
 
 **Implemented in** `amzApplyTransactionsSortAndFilterCore_`:
 
@@ -186,7 +186,7 @@ Configuration is read by `readAmzImportConfig` and validated by `validateAmzImpo
 
 ## 10. Error handling and missing values (especially refund dates)
 
-**In plain English:** Missing **required** mappings fail fast during validation. Bad or empty **dates** on individual CSV rows usually **skip** that row and may log a short detail line (capped so the log doesn’t explode). Refund rows try **Refund Date** first, then **Creation Date**, so placeholders like “Not Applicable” can still yield a usable date.
+Missing **required** mappings fail fast during validation. Bad or empty **dates** on individual CSV rows usually **skip** that row and may log a short detail line (capped so the log doesn’t explode). Refund rows try **Refund Date** first, then **Creation Date**, so placeholders like “Not Applicable” can still yield a usable date.
 
 **General:**
 
