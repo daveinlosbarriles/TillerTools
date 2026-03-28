@@ -13,9 +13,9 @@ function onInstall(e) {
 /** @param {GoogleAppsScript.Events.SheetsOnOpen | GoogleAppsScript.Events.SheetsOnInstall} [e] */
 function onOpen(e) {
   SpreadsheetApp.getUi()
-    .createMenu("Tiller Tools")
-    .addItem("Tiller Amazon Import", "openAmazonOrdersSidebar")
-    .addItem("Tiller Quick Search", "openQuickSearchSidebar")
+    .createMenu("Tiller™ Tools")
+    .addItem("Tiller™ Amazon Import", "openAmazonOrdersSidebar")
+    .addItem("Tiller™ Quick Search", "openQuickSearchSidebar")
     .addToUi();
 }
 
@@ -26,12 +26,12 @@ function onOpen(e) {
  */
 function tillerToolsOnHomepage(e) {
   return CardService.newCardBuilder()
-    .setHeader(CardService.newCardHeader().setTitle("Tiller Tools"))
+    .setHeader(CardService.newCardHeader().setTitle("Tiller™ Tools"))
     .addSection(
       CardService.newCardSection()
         .addWidget(
           CardService.newTextParagraph().setText(
-            "Open Tiller Tools → Tiller Amazon Import or Tiller Quick Search. (When installed as an add-on, the same items may appear under Extensions → Tiller Tools.)"
+            "Open Tiller™ Tools → Tiller™ Amazon Import or Tiller™ Quick Search. (When installed as an add-on, the same items may appear under Extensions → Tiller™ Tools.)"
           )
         )
     )

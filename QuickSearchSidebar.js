@@ -66,7 +66,7 @@ function getTillerColumnMap(sheet) {
  */
 function openQuickSearchSidebar() {
   var html = HtmlService.createHtmlOutputFromFile("QuickSearch");
-  html.setTitle("Tiller Quick Search");
+  html.setTitle("Tiller™ Quick Search");
   SpreadsheetApp.getUi().showSidebar(html);
 }
 
@@ -490,7 +490,18 @@ function setQuickSearchSheetIdCached(id) {
 function getQuickSearchSheet(ss, cachedSheetId) {
   if (!ss) ss = SpreadsheetApp.getActive();
   var sheetId = cachedSheetId != null ? cachedSheetId : getQuickSearchSheetIdCached();
-  var sheet = sheetId != null ? ss.getSheetById(sheetId) : ss.getSheetByName(QUICK_SEARCH_SHEET_NAME);
+  var sheet = null;
+  if (sheetId != null) {
+    try {
+      sheet = ss.getSheetById(sheetId);
+    } catch (e) {
+      sheet = null;
+    }
+  }
+  // Stale cache: sheet was deleted/recreated or id no longer valid — fall back to name.
+  if (!sheet) {
+    sheet = ss.getSheetByName(QUICK_SEARCH_SHEET_NAME);
+  }
   if (sheet) setQuickSearchSheetIdCached(sheet.getSheetId());
   return sheet || null;
 }
@@ -505,8 +516,17 @@ function applyQuickSearchBasicFilter(sheet, criteriaColIndex, lastRow) {
   if (!sheet || criteriaColIndex == null || criteriaColIndex < 2) return { ok: false, timing: timing };
   var matchCol1Based = criteriaColIndex - 1;
 
+  var resolvedLastRow = lastRow || Math.max(sheet.getLastRow(), ROW_DATA_FIRST);
+  var maxRows = 0;
+  try {
+    maxRows = sheet.getMaxRows();
+  } catch (e) { /* ignore */ }
+  if (maxRows > 0) {
+    resolvedLastRow = Math.min(resolvedLastRow, maxRows);
+  }
+
   var t0 = Date.now();
-  var filterRange = sheet.getRange(ROW_HEADER, COL_FIRST, lastRow || Math.max(sheet.getLastRow(), ROW_DATA_FIRST), criteriaColIndex);
+  var filterRange = sheet.getRange(ROW_HEADER, COL_FIRST, resolvedLastRow, criteriaColIndex);
   timing.getRangeMs = Date.now() - t0;
 
   var t1 = Date.now();
@@ -522,6 +542,7 @@ function applyQuickSearchBasicFilter(sheet, criteriaColIndex, lastRow) {
     }
   }
   if (!filter) {
+    amzEnsureSheetGridCovers(sheet, resolvedLastRow, criteriaColIndex);
     var t1b = Date.now();
     try { filter = filterRange.createFilter(); } catch (e) { return { ok: false, timing: timing }; }
     timing.createFilterMs = Date.now() - t1b;
@@ -545,11 +566,12 @@ function applyQuickSearchBasicFilter(sheet, criteriaColIndex, lastRow) {
 
 /**
  * Refreshes the filter. When the filter already exists (common case), only getFilter + setColumnFilterCriteria
- * (~550 ms). When no filter exists, creates it using API row count and createFilter().
+ * (~550 ms). When no filter exists, creates it using the same getLastRow/getMaxRows + grid nudge pattern as
+ * Amazon CSV import (amzApplyTransactionsSortAndFilterCore_), then createFilter().
  * @param {Sheet} sheet - Transactions sheet.
  * @param {number} criteriaColIndex - Criteria column index (1-based).
- * @param {string} spreadsheetId - Spreadsheet ID.
- * @param {number} sheetId - Sheet ID.
+ * @param {string} spreadsheetId - Unused; kept for call-site compatibility.
+ * @param {number} sheetId - Passed through to the return value for client compatibility.
  * @returns {{ ok: boolean, sheetId?: number, timing: object }}
  */
 function refreshQuickSearchFilterView(sheet, criteriaColIndex, spreadsheetId, sheetId) {
@@ -590,9 +612,10 @@ function refreshQuickSearchFilterView(sheet, criteriaColIndex, spreadsheetId, sh
   }
 
   var t2 = Date.now();
-  var lastRow = getQuickSearchSheetGridRowCount(spreadsheetId, sheetId, sheet);
+  var lastRow = getQuickSearchSheetGridRowCount(sheet);
   timing.getLastRowMs = Date.now() - t2;
 
+  amzEnsureSheetGridCovers(sheet, lastRow, criteriaColIndex);
   var filterRange = sheet.getRange(ROW_HEADER, COL_FIRST, lastRow, criteriaColIndex);
   var t3 = Date.now();
   try { filter = filterRange.createFilter(); } catch (e) { /* ignore */ }
@@ -733,24 +756,24 @@ function clearQuickSearch() {
 }
 
 /**
- * Row count for the filter data range: max of Sheets API grid rowCount and sheet.getLastRow().
- * Avoids returning 2 on API failure (that used to create a 2-row basic filter with no effect on real data).
- * @param {string} spreadsheetId
- * @param {number} sheetId
+ * Last row index for the Quick Search basic filter range (1-based), matching Amazon import metadata filter logic:
+ * max(getLastRow(), ROW_DATA_FIRST), then clamp to getMaxRows() when the grid reports a positive max.
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @returns {number}
  */
-function getQuickSearchSheetGridRowCount(spreadsheetId, sheetId, sheet) {
-  var fallback = sheet ? Math.max(sheet.getLastRow(), ROW_DATA_FIRST) : ROW_DATA_FIRST;
+function getQuickSearchSheetGridRowCount(sheet) {
+  if (!sheet) return ROW_DATA_FIRST;
+  var lastRowRaw = 0;
   try {
-    var spread = Sheets.Spreadsheets.get(spreadsheetId, { fields: "sheets(properties(sheetId,gridProperties(rowCount)))" });
-    var sheets = spread.sheets || [];
-    for (var i = 0; i < sheets.length; i++) {
-      if (sheets[i].properties && Number(sheets[i].properties.sheetId) === Number(sheetId)) {
-        var rc = sheets[i].properties.gridProperties ? sheets[i].properties.gridProperties.rowCount : undefined;
-        var gridRows = Math.max(rc != null ? Number(rc) : 0, ROW_DATA_FIRST);
-        return Math.max(gridRows, fallback);
-      }
-    }
+    lastRowRaw = sheet.getLastRow();
   } catch (e) { /* ignore */ }
-  return fallback;
+  var lastRow = Math.max(lastRowRaw, ROW_DATA_FIRST);
+  var maxRows = 0;
+  try {
+    maxRows = sheet.getMaxRows();
+  } catch (e) { /* ignore */ }
+  if (maxRows > 0) {
+    lastRow = Math.min(lastRow, maxRows);
+  }
+  return lastRow;
 }

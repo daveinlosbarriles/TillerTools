@@ -6,15 +6,25 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
   <style>
+    :root {
+      /* Extra space below all content so primary actions are not clipped in the Sheets sidebar iframe */
+      --sidebar-bottom-safe: 80px;
+    }
     html, body {
       margin: 0;
       padding: 0;
     }
+    html {
+      box-sizing: border-box;
+    }
+    *, *::before, *::after {
+      box-sizing: inherit;
+    }
     body {
       margin-top: 4px;
+      padding-bottom: var(--sidebar-bottom-safe);
       font-family: Arial, sans-serif;
       font-size: 13px;
-      box-sizing: border-box;
       background: transparent;
       color: #222;
       max-height: 100vh;
@@ -66,10 +76,36 @@
     }
     button.primary { background: #1a73e8; color: #fff; border-color: #1557b0; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
-    #log {
-      font-family: Consolas, Menlo, monospace; font-size: 11px;
-      border: 1px solid #ccc; padding: 4px; background: transparent;
-      min-height: 48px; max-height: 180px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+    .import-status-feed {
+      font-size: 13px; line-height: 1.0875; color: #222; margin: 4px 0 0 0;
+    }
+    .import-pipeline { margin: 0 0 10.5px 0; }
+    .import-pipeline-title { font-weight: bold; margin: 0 0 3px 0; }
+    .import-pipeline-lines { margin: 0; padding: 0 0 0 1em; list-style: none; }
+    .import-pipeline-lines li { margin: 1.5px 0; padding: 0; position: relative; }
+    .import-pipeline-lines li::before { content: "·"; position: absolute; left: -0.75em; }
+    .import-pipeline-line--debug { font-size: 11px; color: #666; font-family: Consolas, Menlo, monospace; word-break: break-word; }
+    .import-pipeline-line--warn { color: #b06000; }
+    .import-summary-line { margin: 0 0 6px 0; }
+    .import-finished-head { margin: 0 0 4.5px 0; font-size: 14px; }
+    .offset-req-star { color: #c5221f; font-weight: bold; }
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+      clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+    }
+    .import-sidebar-bottom-anchor {
+      height: 1px;
+      width: 100%;
+      margin: 0 0 20px 0;
+      padding: 0;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .sidebar-end-spacer {
+      height: 56px;
+      min-height: 56px;
+      width: 100%;
+      flex-shrink: 0;
     }
     ul.files { margin: 2px 0 4px 0; padding-left: 18px; }
     .cb-list label { font-weight: normal; display: flex; align-items: flex-start; gap: 6px; margin: 3px 0; line-height: 1.3; }
@@ -91,6 +127,11 @@
       flex-wrap: wrap;
       align-items: center;
       gap: 10px 14px;
+      scroll-margin-bottom: var(--sidebar-bottom-safe);
+      scroll-margin-top: 8px;
+    }
+    #btnImport {
+      scroll-margin-bottom: var(--sidebar-bottom-safe);
     }
     .pay-miss { font-size: 12px; margin: 4px 0; padding: 4px 6px; background: rgba(255, 248, 225, 0.85); border: 1px solid #ffe082; border-radius: 2px; }
     a { color: #1a73e8; }
@@ -103,12 +144,37 @@
     .status-suggested { color: #0d652d; }
     .status-unknown { color: #c5221f; }
     .warn-time { font-size: 12px; color: #666; margin: 4px 0; }
-    .success-block { font-size: 13px; margin: 4px 0 0 0; padding: 6px; background: rgba(230, 244, 234, 0.9); border: 1px solid #ceead6; border-radius: 2px; line-height: 1.4; }
+    .success-block { font-size: 13px; margin: 4px 0 0 0; padding: 6px; background: rgba(230, 244, 234, 0.9); border: 1px solid #ceead6; border-radius: 2px; line-height: 1.05; }
+    .success-block p { margin: 5.25px 0; }
+    .success-block p:first-child { margin-top: 0; }
+    .success-block p:last-child { margin-bottom: 0; }
+    .import-no-rows { background: rgba(255, 248, 225, 0.95); border-color: #ffe082; }
     .file-pick { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; max-width: 100%; }
     #zipFile { position: absolute; width: 0.1px; height: 0.1px; opacity: 0; overflow: hidden; z-index: -1; }
     #zipFileName { font-size: 12px; color: #555; flex: 1; min-width: 0; word-break: break-all; }
     .hint { font-size: 12px; color: #666; line-height: 1.3; margin: 2px 0; }
     .section-title { font-weight: bold; margin: 0 0 4px 0; }
+    .import-busy-row {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 8px 0;
+      font-size: 13px;
+      font-weight: bold;
+      color: #333;
+    }
+    .import-busy-spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid #e0e0e0;
+      border-top-color: #1a73e8;
+      border-radius: 50%;
+      animation: import-busy-spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes import-busy-spin {
+      to { transform: rotate(360deg); }
+    }
     .field-include-orders { margin-top: 3px; }
     .help-toggle-nudge-down { margin-top: 3px; }
     .help-toggle-nudge-category { margin-top: 4px; }
@@ -184,7 +250,7 @@
           <label for="cutoff">Ignore orders older than:</label>
           <input type="date" id="cutoff" />
         </div>
-        <p class="hint" style="margin:6px 0 0 0;">NOTE: Duplicate transactions are never imported.</p>
+        <p class="hint" style="margin:6px 0 0 0;">Duplicate transactions are never imported.</p>
       </div>
       <button type="button" class="help-toggle help-toggle-nudge-down" aria-label="Help" data-help="helpDate">?</button>
     </div>
@@ -196,17 +262,17 @@
     <div class="row-with-help">
       <div class="main-col">
         <div class="inline-field-line">
-          <label for="offsetCat">Category for offsets</label>
+          <label for="offsetCat">Offset category <span class="offset-req-star" aria-hidden="true">*</span><span class="sr-only"> (required)</span></label>
           <select id="offsetCat">
             <option value="__AMZ_OFFSET_SELECT__">-- Select Value --</option>
-            <option value="">— Uncategorized —</option>
+            <option value="">Blank</option>
           </select>
         </div>
       </div>
       <button type="button" class="help-toggle help-toggle-nudge-category" aria-label="Help" data-help="helpCat">?</button>
     </div>
     <div id="helpCat" class="help-panel">
-      <p>Choose “— Uncategorized —” (no category on offset rows) or a real category—not “-- Select Value --”. Suggest creating a category “Amazon”, and assign all offsets to that category. Then excluding that category from reporting.</p>
+      <p>Choose <strong>Blank</strong> (no category on offset rows—the same idea as an empty cell in Sheets) or a real category—not “-- Select Value --”. Suggest creating a category “Amazon”, and assign all offsets to that category. Then excluding that category from reporting.</p>
       <p>Also, all of your credit card transactions on Amazon orders should also be set to “Amazon.” This way, they cancel each other out, are both excluded from reporting, and you are only reporting on the specific items you bought, and the categories you assigned to them.</p>
       <p>Note that we have to create offsets when importing your spending, to avoid counting that spending twice – first with your credit card transaction, and then again with the Amazon imported transaction.</p>
     </div>
@@ -244,15 +310,19 @@
 
   <!-- Panel D: status -->
   <div id="panelStatus" class="panel panel-hidden">
-    <div class="field">
-      <label>Import status</label>
-      <pre id="log"></pre>
+    <div id="importBusyRow" class="import-busy-row" style="display: none;" aria-live="polite" aria-busy="false">
+      <span class="import-busy-spinner" aria-hidden="true"></span>
+      <span class="import-busy-text" id="importBusyText">Working…</span>
     </div>
+    <div id="importStatusFeed" class="import-status-feed" aria-live="polite" role="status" aria-label="Import progress"></div>
     <div id="successBlock" class="success-block" style="display:none;"></div>
     <div class="btn-row">
       <button type="button" id="btnStartOver" style="display: none;">Start over</button>
     </div>
+    <div id="importSidebarBottomAnchor" aria-hidden="true" class="import-sidebar-bottom-anchor"></div>
   </div>
+
+  <div id="sidebarEndSpacer" class="sidebar-end-spacer" aria-hidden="true"></div>
 
   <script>
     (function () {
@@ -437,13 +507,68 @@
         var t = $("payMethodsTitleRow");
         if (t) t.style.display = show ? "flex" : "none";
       }
+      function scrollImportActionIntoView() {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            var row = $("importActionRow");
+            if (!row || row.style.display === "none") return;
+            try {
+              row.scrollIntoView({ behavior: "smooth", block: "end" });
+            } catch (e) {}
+            var pad = $("sidebarEndSpacer");
+            if (pad) {
+              try {
+                pad.scrollIntoView({ behavior: "smooth", block: "end" });
+              } catch (e1) {}
+            }
+            var y = Math.max(
+              document.documentElement ? document.documentElement.scrollHeight : 0,
+              document.body ? document.body.scrollHeight : 0
+            );
+            try {
+              window.scrollTo({ top: y, behavior: "smooth" });
+            } catch (e2) {
+              window.scrollTo(0, y);
+            }
+          });
+        });
+        setTimeout(scrollImportActionIntoViewSoon, 400);
+        setTimeout(scrollImportActionIntoViewSoon, 850);
+      }
+
+      function scrollImportActionIntoViewSoon() {
+        var row = $("importActionRow");
+        if (!row || row.style.display === "none") return;
+        try {
+          row.scrollIntoView({ behavior: "smooth", block: "end" });
+        } catch (e) {}
+        var y = Math.max(
+          document.documentElement ? document.documentElement.scrollHeight : 0,
+          document.body ? document.body.scrollHeight : 0
+        );
+        try {
+          window.scrollTo({ top: y, behavior: "smooth" });
+        } catch (e2) {
+          window.scrollTo(0, y);
+        }
+        var pad = $("sidebarEndSpacer");
+        if (pad) {
+          try {
+            pad.scrollIntoView({ behavior: "smooth", block: "end" });
+          } catch (e3) {}
+        }
+      }
+
       function showImportButton(show) {
         var row = $("importActionRow");
         if (row) row.style.display = show ? "flex" : "none";
-        if (show) updateOffsetCategoryUiGating();
+        if (show) {
+          updateOffsetCategoryUiGating();
+          scrollImportActionIntoView();
+        }
       }
 
-      /** Enable Next / Import only after user leaves “-- Select Value --” (Uncategorized or a sheet category). */
+      /** Enable Next / Import only after user leaves “-- Select Value --” (Blank or a sheet category). */
       function updateOffsetCategoryUiGating() {
         var sel = $("offsetCat");
         var next2 = $("btnNext2");
@@ -478,15 +603,240 @@
         }
         updateOffsetCategoryUiGating();
       }
+
+      /** Wait cursor, spinner, and disabled Import while chunked server import runs. */
+      function setImportBusy(busy) {
+        var row = $("importBusyRow");
+        var imp = $("btnImport");
+        var bust = $("importBusyText");
+        if (busy) {
+          document.body.style.cursor = "wait";
+          if (row) {
+            row.style.display = "flex";
+            row.setAttribute("aria-busy", "true");
+          }
+          if (imp) imp.disabled = true;
+          if (bust) bust.textContent = "Working…";
+        } else {
+          document.body.style.cursor = "";
+          if (row) {
+            row.style.display = "none";
+            row.setAttribute("aria-busy", "false");
+          }
+          if (bust) bust.textContent = "Working…";
+          updateOffsetCategoryUiGating();
+        }
+      }
+
+      function setImportBusyLabel(text) {
+        var bust = $("importBusyText");
+        if (bust) bust.textContent = text || "Working…";
+      }
+
+      function pipelineDisplayTitle(step) {
+        switch (step) {
+          case "orderHistory":
+            return "Importing orders";
+          case "digitalOrders":
+            return "Importing digital orders";
+          case "digitalReturns":
+            return "Importing digital returns";
+          case "refundDetails":
+            return "Importing order returns";
+          case "finalize":
+            return "Finishing";
+          case "preflight":
+            return "Import";
+          default:
+            return "Import";
+        }
+      }
+
+      function scrollImportViewToBottom() {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            var anchor = $("importSidebarBottomAnchor");
+            var pad = $("sidebarEndSpacer");
+            var y = Math.max(
+              document.documentElement ? document.documentElement.scrollHeight : 0,
+              document.body ? document.body.scrollHeight : 0
+            );
+            try {
+              window.scrollTo({ top: y, behavior: "smooth" });
+            } catch (e) {
+              window.scrollTo(0, y);
+            }
+            if (pad) {
+              try {
+                pad.scrollIntoView({ behavior: "smooth", block: "end" });
+              } catch (e1) {}
+            } else if (anchor) {
+              try {
+                anchor.scrollIntoView({ behavior: "smooth", block: "end" });
+              } catch (e2) {}
+            }
+          });
+        });
+      }
+
+      function scrollImportViewToBottomSoon() {
+        scrollImportViewToBottom();
+        setTimeout(scrollImportViewToBottom, 400);
+        setTimeout(scrollImportViewToBottom, 850);
+      }
+
+      function clearImportStatusFeed() {
+        var feed = $("importStatusFeed");
+        if (feed) feed.innerHTML = "";
+      }
+
+      function isPipelineDebugOnlyLine(s) {
+        if (/^\s*===\s*Transactions sheet\s*===\s*$/i.test(s.trim())) return true;
+        if (/^\s*Server:\s/.test(s)) return true;
+        if (/^\s*Detected file type:\s/.test(s)) return true;
+        if (/\d+\s+order\(s\)\s+had\s+a\s+net\s+total\s+of\s+\$0\b/.test(s)) return true;
+        return false;
+      }
+
+      function isPipelineSectionHeaderLine(s) {
+        return /^\s*===\s*.+\s*===\s*$/.test(String(s || "").trim());
+      }
+
+      function partitionServerLogLines(raw, stepId) {
+        var user = [];
+        var debug = [];
+        var lines = String(raw || "")
+          .replace(/\r/g, "\n")
+          .split("\n");
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i];
+          if (/^\s*AMZ_IMPORT_COMMIT_COUNT:\d+\s*$/.test(line)) continue;
+          if (isPipelineDebugOnlyLine(line)) {
+            if (stepId === "finalize" && /^\s*Server:\s*sort sheet\b/i.test(line)) user.push(line);
+            else debug.push(line);
+          } else if (isPipelineSectionHeaderLine(line)) continue;
+          else user.push(line);
+        }
+        return { user: user, debug: debug };
+      }
+
+      function normalizeUserLineForPipeline(line, step) {
+        var s = String(line || "").trim();
+        if (!s) return "";
+        if (step === "orderHistory") {
+          s = s.replace(/^(\d+)\s+transactions imported\s*$/i, "$1 orders imported");
+          s = s.replace(/^(\d+)\s+duplicate transactions were not imported\.?\s*$/i, "$1 duplicates not imported");
+          s = s.replace(/^No new transactions found\s*$/i, "No new orders");
+        } else if (step === "digitalOrders") {
+          s = s.replace(/^(\d+)\s+transactions imported\s*$/i, "$1 digital orders imported");
+          s = s.replace(/^(\d+)\s+duplicate transactions were not imported\.?\s*$/i, "$1 duplicates not imported");
+          s = s.replace(/^No new transactions found\s*$/i, "No new digital orders");
+        } else if (step === "digitalReturns") {
+          s = s.replace(/^Digital returns:\s*/i, "");
+          s = s.replace(/^(\d+)\s+transactions imported\s*$/i, "$1 digital returns imported");
+          s = s.replace(/^(\d+)\s+duplicates skipped\.?\s*$/i, "$1 duplicates not imported");
+          s = s.replace(/^no new transactions\s*$/i, "No new digital returns");
+        } else if (step === "refundDetails") {
+          s = s.replace(/^Orders returns:\s*/i, "");
+          s = s.replace(/^(\d+)\s+transactions imported\s*$/i, "$1 returns imported");
+          s = s.replace(/^(\d+)\s+duplicates skipped\.?\s*$/i, "$1 returns not imported");
+          s = s.replace(/^no new transactions\s*$/i, "No new returns");
+        } else if (step === "finalize") {
+          s = s.replace(/^\s*===\s*Transactions sheet\s*===\s*$/i, "").trim();
+          if (!s) return "";
+          s = s.replace(/^\s*Server:\s*sort sheet by Date:\s*/i, "Sorted Transactions by date in ");
+        }
+        return s;
+      }
+
+      function isPipelineWarnLine(s) {
+        var t = String(s || "").trim();
+        if (/^\s*(Error|Warning)\b/i.test(t)) return true;
+        if (/\(skipped:/i.test(t)) return true;
+        if (/not in ZIP/i.test(t)) return true;
+        if (/not selected/i.test(t)) return true;
+        return false;
+      }
+
+      function getOrCreatePipelineSection(stepId) {
+        var feed = $("importStatusFeed");
+        if (!feed) return null;
+        var sid = String(stepId || "unknown");
+        var existing = feed.querySelector('[data-step="' + sid + '"]');
+        if (existing) return existing;
+        var wrap = document.createElement("div");
+        wrap.className = "import-pipeline";
+        wrap.setAttribute("data-step", sid);
+        var title = document.createElement("div");
+        title.className = "import-pipeline-title";
+        title.textContent = pipelineDisplayTitle(sid);
+        var ulUser = document.createElement("ul");
+        ulUser.className = "import-pipeline-lines import-pipeline-user";
+        var ulDbg = document.createElement("ul");
+        ulDbg.className = "import-pipeline-lines import-pipeline-debug";
+        ulDbg.style.display = "none";
+        wrap.appendChild(title);
+        wrap.appendChild(ulUser);
+        wrap.appendChild(ulDbg);
+        feed.appendChild(wrap);
+        return wrap;
+      }
+
+      function appendPipelineListItems(ul, lines, debugStyle) {
+        for (var i = 0; i < lines.length; i++) {
+          var t = String(lines[i] || "").trim();
+          if (!t) continue;
+          var li = document.createElement("li");
+          if (debugStyle) li.className = "import-pipeline-line--debug";
+          else if (isPipelineWarnLine(t)) li.className = "import-pipeline-line--warn";
+          li.textContent = t;
+          ul.appendChild(li);
+        }
+      }
+
+      function appendRawLinesToPipeline(stepId, rawLog) {
+        var part = partitionServerLogLines(rawLog, stepId);
+        var showDbg = isImportDebugEnabled();
+        var userShown = [];
+        for (var u = 0; u < part.user.length; u++) {
+          var nu = normalizeUserLineForPipeline(part.user[u], stepId);
+          if (nu) userShown.push(nu);
+        }
+        var sec = getOrCreatePipelineSection(stepId);
+        if (!sec) return;
+        var ulU = sec.querySelector(".import-pipeline-user");
+        var ulD = sec.querySelector(".import-pipeline-debug");
+        appendPipelineListItems(ulU, userShown, false);
+        if (showDbg && ulD && part.debug.length) {
+          ulD.style.display = "";
+          appendPipelineListItems(ulD, part.debug, true);
+        }
+        scrollImportViewToBottom();
+      }
+
+      function appendPipelineError(stepId, message) {
+        var sec = getOrCreatePipelineSection(stepId || "preflight");
+        if (!sec) return;
+        var ulU = sec.querySelector(".import-pipeline-user");
+        var li = document.createElement("li");
+        li.className = "import-pipeline-line--warn";
+        li.textContent = message;
+        ulU.appendChild(li);
+        scrollImportViewToBottom();
+      }
+
+      function appendPreflightMessages(messages) {
+        for (var i = 0; i < messages.length; i++) appendPipelineError("preflight", messages[i]);
+      }
+
       function runAmazonImport() {
         var w = $("importWarnTime");
         if (w) w.style.display = "block";
         $("panelStatus").classList.remove("panel-hidden");
-        $("log").textContent = "";
+        clearImportStatusFeed();
         $("successBlock").style.display = "none";
         $("successBlock").textContent = "";
         $("btnStartOver").style.display = "none";
-        log("Starting import…");
 
         var runOH = $("cbPhysical").checked || $("cbWF").checked;
         var steps = [];
@@ -496,20 +846,22 @@
         if ($("cbRefund").checked) steps.push("refundDetails");
 
         if (!steps.length) {
-          log("No import steps were run. Select at least one order type and ensure the ZIP contains the matching CSV(s).");
-          $("panelStatus").scrollIntoView({ behavior: "smooth", block: "nearest" });
+          appendPreflightMessages([
+            "No import steps were run. Select at least one order type and ensure the ZIP contains the matching CSV(s)."
+          ]);
           $("btnStartOver").style.display = "inline-block";
+          scrollImportViewToBottomSoon();
           return;
         }
 
         var oc = $("offsetCat");
         var catRaw = oc && oc.value != null ? String(oc.value) : AMZ_OFFSET_CATEGORY_SELECT_VALUE;
         if (!oc || oc.selectedIndex <= 0 || catRaw === AMZ_OFFSET_CATEGORY_SELECT_VALUE) {
-          log(
-            'Choose a Category for offsets: “— Uncategorized —” or a category from your sheet—not “-- Select Value --”.'
-          );
-          $("panelStatus").scrollIntoView({ behavior: "smooth", block: "nearest" });
+          appendPreflightMessages([
+            "Choose Blank or a category from your sheet for Offset category — not “-- Select Value --”."
+          ]);
           $("btnStartOver").style.display = "inline-block";
+          scrollImportViewToBottomSoon();
           return;
         }
 
@@ -517,7 +869,9 @@
         var tf = buildTransmitFiles(state.files);
         var ts = null;
         var anyImport = false;
+        var totalRowsCommitted = 0;
         var qi = 0;
+        var importRunCurrentStep = null;
 
         function basePayload() {
           var p = {
@@ -534,40 +888,54 @@
         }
 
         function showImportDone() {
-          log("");
-          log("=== Import finished ===");
+          setImportBusy(false);
           var sec = (Date.now() - importT0) / 1000;
           var rounded = Math.round(sec * 10) / 10;
-          log("Total time: " + rounded + " s");
-          google.script.run.withFailureHandler(function () {}).amzNotifyImportBundleFinished(rounded, true, "");
-          $("successBlock").style.display = "block";
-          $("successBlock").innerHTML =
-            "Your transactions have been imported, and are visible on the <strong>Transactions</strong> sheet.<br><br>" +
-            "If you want to reverse this import, just delete the individual transactions now showing on the Transactions sheet.";
-          $("panelStatus").scrollIntoView({ behavior: "smooth", block: "nearest" });
+          var sb = $("successBlock");
+          sb.style.display = "block";
+          if (totalRowsCommitted > 0) {
+            sb.className = "success-block";
+            sb.innerHTML =
+              "<p class=\"import-summary-line\">" +
+              totalRowsCommitted +
+              " new transactions, " +
+              rounded +
+              "s.</p>" +
+              "<p class=\"import-finished-head\"><strong>Import finished</strong></p>" +
+              "<p>To reverse this import, just delete the new transactions.</p>";
+          } else {
+            sb.className = "success-block import-no-rows";
+            sb.innerHTML =
+              "<p class=\"import-summary-line\">0 new transactions, " + rounded + "s.</p>" +
+              "<p class=\"import-finished-head\"><strong>Import finished</strong></p>" +
+              "<p><strong>No new rows</strong> were added to <strong>Transactions</strong> this run. " +
+              "Check the status above for duplicates, cutoff date, or skipped files. " +
+              "The sheet was still sorted and the import view filter may have been refreshed.</p>";
+          }
           $("btnStartOver").style.display = "inline-block";
+          scrollImportViewToBottomSoon();
         }
 
         function failImport(err) {
+          setImportBusy(false);
           var msg = err && err.message ? err.message : String(err);
           var sec = (Date.now() - importT0) / 1000;
           var rounded = Math.round(sec * 10) / 10;
           google.script.run.withFailureHandler(function () {}).amzNotifyImportBundleFinished(rounded, false, msg);
-          log("Server error: " + msg);
-          $("panelStatus").scrollIntoView({ behavior: "smooth", block: "nearest" });
+          appendPipelineError(importRunCurrentStep || "preflight", "Server error: " + msg);
           $("btnStartOver").style.display = "inline-block";
+          scrollImportViewToBottomSoon();
         }
 
         function runFinalize() {
+          importRunCurrentStep = "finalize";
+          setImportBusyLabel(pipelineDisplayTitle("finalize"));
           var p = basePayload();
           p.step = "finalize";
           google.script.run
             .withSuccessHandler(function (res) {
               if (res && res.bundleImportTimestampIso) ts = res.bundleImportTimestampIso;
-              if (res && res.log) {
-                var finLog = filterServerImportLogForDisplay(String(res.log), isImportDebugEnabled());
-                if (finLog) log(finLog);
-              }
+              if (res && res.log) appendRawLinesToPipeline("finalize", String(res.log));
               showImportDone();
             })
             .withFailureHandler(failImport)
@@ -581,6 +949,8 @@
             return;
           }
           var step = steps[qi++];
+          importRunCurrentStep = step;
+          setImportBusyLabel(pipelineDisplayTitle(step) + "…");
           var p = basePayload();
           p.step = step;
           if (step === "orderHistory") p.orderHistoryCsv = tf.orderHistory;
@@ -597,50 +967,29 @@
           google.script.run
             .withSuccessHandler(function (res) {
               if (!res || typeof res !== "object") {
+                importRunCurrentStep = step;
                 failImport(new Error("Unexpected server response."));
                 return;
               }
               if (res.bundleImportTimestampIso) ts = res.bundleImportTimestampIso;
               if (res.didImport) anyImport = true;
-              if (res.log) {
-                var chunkLog = filterServerImportLogForDisplay(String(res.log), isImportDebugEnabled());
-                if (chunkLog) log(chunkLog);
+              if (res.rowsWritten != null && !isNaN(Number(res.rowsWritten))) {
+                totalRowsCommitted += Number(res.rowsWritten);
               }
+              if (res.log) appendRawLinesToPipeline(res.step || step, String(res.log));
               pump();
             })
             .withFailureHandler(failImport)
             .importAmazonBundleChunk(JSON.stringify(p));
         }
 
+        setImportBusy(true);
         pump();
-      }
-      /**
-       * When showDebug is false, drop verbose server timing, column maps, and sample cell lines.
-       * When true, show full server log (timings, column indexes, etc.).
-       */
-      function filterServerImportLogForDisplay(raw, showDebug) {
-        if (showDebug) return String(raw || "").replace(/\r/g, "\n");
-        return String(raw || "")
-          .split(/\r\n|\r|\n/)
-          .filter(function (line) {
-            var s = line;
-            if (/^\s*===\s*Transactions sheet\s*===\s*$/i.test(s.trim())) return false;
-            if (/^\s*Server:\s/.test(s)) return false;
-            if (/^\s*Detected file type:\s/.test(s)) return false;
-            if (/\d+\s+order\(s\)\s+had\s+a\s+net\s+total\s+of\s+\$0\b/.test(s)) return false;
-            return true;
-          })
-          .join("\n");
       }
 
       function isImportDebugEnabled() {
         var a = $("cbShowDebug");
         return !!(a && a.checked);
-      }
-      function log(msg) {
-        var el = $("log");
-        el.textContent += msg + "\n";
-        el.scrollTop = el.scrollHeight;
       }
 
       function bindHelpToggles() {
@@ -807,6 +1156,7 @@
                     insertNote +
                     "<p class=\"hint\">Review the <strong>AMZ Import</strong> tab if you need to edit any payment row.</p>";
                   updatePayAccountHintVisibility(data);
+                  scrollImportActionIntoView();
                 })
                 .withFailureHandler(function (err) {
                   $("payPanel").innerHTML =
@@ -815,6 +1165,7 @@
                     escapeHtml(err.message || String(err)) +
                     "</p>";
                   updatePayAccountHintVisibility(data);
+                  scrollImportActionIntoView();
                 })
                 .insertSuggestedAmzPaymentRows(JSON.stringify(toInsert));
             } catch (ex) {
@@ -919,6 +1270,7 @@
       $("btnImport").addEventListener("click", runAmazonImport);
 
       $("btnStartOver").addEventListener("click", function () {
+        setImportBusy(false);
         state.files = { orderHistory: null, digitalOrders: null, digitalReturns: null, refundDetails: null };
         state.payAnalysis = null;
         $("zipFile").value = "";
@@ -931,7 +1283,7 @@
         updatePayAccountHintVisibility(null);
         showPayMethodsTitle(false);
         showImportButton(false);
-        $("log").textContent = "";
+        clearImportStatusFeed();
         $("successBlock").style.display = "none";
         $("btnStartOver").style.display = "none";
         var w = $("importWarnTime");

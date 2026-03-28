@@ -9,8 +9,8 @@
 const AMZ_IMPORT_SHEET_NAME = "AMZ Import";
 
 /**
- * Sidebar "Category for offsets" `<select>` first option value (must match AmazonOrdersSidebar.html).
- * Empty string is reserved for explicit "Uncategorized"; this sentinel means the user did not choose yet.
+ * Sidebar "Offset category" `<select>` first option value (must match AmazonOrdersSidebar.html).
+ * Empty string is reserved for explicit "Blank" (no category on offset rows); this sentinel means the user did not choose yet.
  */
 const AMZ_OFFSET_CATEGORY_SELECT_VALUE = "__AMZ_OFFSET_SELECT__";
 
@@ -24,6 +24,9 @@ const AMZ_STANDARD_MARKER_HEADER = "Carrier Name & Tracking Number";
  * Change the cell on AMZ Import if your sheet uses a different header text.
  */
 const AMZ_DEFAULT_TILLER_LABEL_DATE_ADDED = "Date Added";
+
+/** Value written to Transactions Source for every row this add-on inserts (orders, returns, offsets, etc.). */
+const AMZ_TRANSACTIONS_SOURCE_VALUE = "AmazonCSV";
 
 /** Legacy reference (unused); Transactions column names live on AMZ Import Tiller labels. */
 const AMZ_TILLER_CONFIG = {
@@ -41,6 +44,7 @@ const AMZ_TILLER_CONFIG = {
     ACCOUNT_NUMBER: "Account #",
     INSTITUTION: "Institution",
     ACCOUNT_ID: "Account ID",
+    SOURCE: "Source",
     METADATA: "Metadata"
   }
 };
@@ -76,6 +80,7 @@ const AMZ_IMPORT_DEFAULTS = {
     ["ACCOUNT_NUMBER", "Account #"],
     ["INSTITUTION", "Institution"],
     ["ACCOUNT_ID", "Account ID"],
+    ["SOURCE", "Source"],
     ["METADATA", "Metadata"]
   ]
 };
@@ -211,7 +216,7 @@ function amzGetSourceMapHeader(config, sourceCanon, nameInCode) {
 const AMZ_REQUIRED_TILLER_LABEL_KEYS = [
   "SHEET_NAME", "DATE", "DESCRIPTION", "AMOUNT", "TRANSACTION_ID",
   "FULL_DESCRIPTION", "DATE_ADDED", "MONTH", "WEEK", "ACCOUNT",
-  "ACCOUNT_NUMBER", "INSTITUTION", "ACCOUNT_ID", "METADATA"
+  "ACCOUNT_NUMBER", "INSTITUTION", "ACCOUNT_ID", "SOURCE", "METADATA"
 ];
 
 /** Transactions columns written on each import row (excludes SHEET_NAME) — resolve via {@link amzGetTillerColumnIndex_}. */
@@ -228,6 +233,7 @@ const AMZ_WRITTEN_TILLER_LABEL_KEYS = [
   "ACCOUNT_NUMBER",
   "INSTITUTION",
   "ACCOUNT_ID",
+  "SOURCE",
   "METADATA"
 ];
 
@@ -433,19 +439,18 @@ function amzParseImportAmazonOptions(options) {
   return opts;
 }
 
-/** Parse "yyyy-MM-dd HH:mm:ss" (script timezone) for bundle imports. */
+/**
+ * Parse "yyyy-MM-dd HH:mm:ss" as wall time in the **active spreadsheet** timezone (same as {@link amzFormatImportTimestampStr_}).
+ */
 function amzParseImportTimestampToDate(s) {
-  const str = String(s || "").trim();
-  const m = str.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/);
-  if (!m) return new Date();
-  return new Date(
-    Number(m[1]),
-    Number(m[2]) - 1,
-    Number(m[3]),
-    Number(m[4]),
-    Number(m[5]),
-    Number(m[6])
-  );
+  const str = String(s || "").trim().replace("T", " ");
+  if (!/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.test(str)) return new Date();
+  const tz = amzActiveSpreadsheetTimeZoneOrDefault_();
+  try {
+    return Utilities.parseDate(str, tz, "yyyy-MM-dd HH:mm:ss");
+  } catch (e) {
+    return new Date();
+  }
 }
 
 /**
@@ -601,19 +606,47 @@ function amzCutoffStartOfDay_(userCutoff) {
 }
 
 /**
- * Sort + Metadata filter using an already-resolved Transactions sheet and column map (no AMZ Import re-read).
+ * @param {string|{ importTimestampStr?: string, sourceFilterOnly?: boolean, legacyMetadataContains?: string }|null|undefined} filterSpec
+ * @returns {{ importTimestampStr?: string, sourceFilterOnly?: boolean, legacyMetadataContains?: string }|null}
+ */
+function amzNormalizePostImportFilterSpec_(filterSpec) {
+  if (filterSpec == null || filterSpec === "") return null;
+  if (typeof filterSpec === "string") {
+    const t = String(filterSpec).trim();
+    return t ? { importTimestampStr: t } : null;
+  }
+  if (typeof filterSpec === "object") return filterSpec;
+  return null;
+}
+
+/**
+ * Sort + filter on Transactions (no AMZ Import re-read). Filter modes:
+ * - Normal import: Source = {@link AMZ_TRANSACTIONS_SOURCE_VALUE} and Date Added = run instant ({@code importTimestampStr}).
+ * - {@code sourceFilterOnly}: Source only (e.g. TestFilterSort).
+ * - {@code legacyMetadataContains}: Metadata whenTextContains (old rows with importer prefix).
  * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} ss
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
  * @param {Object} tillerCols
  * @param {Object} tillerLabels
  * @param {string} sheetName
- * @param {string} filterSubstr - Trimmed substring for Metadata filter; empty skips filter (sort still runs).
+ * @param {string|Object|null|undefined} filterSpec - string treated as {@code importTimestampStr}; empty skips filter (sort still runs).
  * @returns {Array<string>} Log lines
  */
-function amzApplyTransactionsSortAndFilterCore_(ss, sheet, tillerCols, tillerLabels, sheetName, filterSubstr) {
+function amzApplyTransactionsSortAndFilterCore_(ss, sheet, tillerCols, tillerLabels, sheetName, filterSpec) {
   const lines = [];
+  const spec = amzNormalizePostImportFilterSpec_(filterSpec);
+  const sourceOnly = spec && spec.sourceFilterOnly === true;
+  const legacyMeta =
+    spec && spec.legacyMetadataContains != null ? String(spec.legacyMetadataContains).trim() : "";
+  const importTs = spec && spec.importTimestampStr != null ? String(spec.importTimestampStr).trim() : "";
+  const willApplyRunFilter = importTs !== "" && !sourceOnly && legacyMeta === "";
+  const willApplySourceOnly = sourceOnly && legacyMeta === "";
+  const willApplyLegacyMeta = legacyMeta !== "" && !sourceOnly;
+  const willSetAnyFilter = willApplyRunFilter || willApplySourceOnly || willApplyLegacyMeta;
+
   const metaCol = amzGetTillerColumnIndex_(tillerCols, tillerLabels.METADATA);
-  const willSetMetadataFilter = metaCol != null && metaCol >= 1 && filterSubstr !== "";
+  const sourceCol = amzGetTillerColumnIndex_(tillerCols, tillerLabels.SOURCE);
+  const dateAddedCol = amzGetTillerColumnIndex_(tillerCols, tillerLabels.DATE_ADDED);
 
   // Sort must run on the full data range; an active filter can block rows from reordering.
   try {
@@ -684,14 +717,12 @@ function amzApplyTransactionsSortAndFilterCore_(ss, sheet, tillerCols, tillerLab
     "Server: sort sheet by Date: " + ((tSortEnd - tSortStart) / 1000).toFixed(2) + " s"
   );
 
-  if (willSetMetadataFilter) {
+  if (willSetAnyFilter) {
     let lastRowRaw = 0;
     let maxRows = 0;
     let maxCols = 0;
     let numColsForFilter = 0;
     try {
-      // Basic filter was already removed before sort (see block above). Do not call getFilter() again
-      // here — it can throw "coordinates outside dimensions" on some sheets and abort before dimensions.
       try {
         SpreadsheetApp.flush();
       } catch (flushErr) {
@@ -719,7 +750,15 @@ function amzApplyTransactionsSortAndFilterCore_(ss, sheet, tillerCols, tillerLab
       if (maxRows > 0) {
         lastRowForFilter = Math.min(lastRowForFilter, maxRows);
       }
-      numColsForFilter = Math.max(numColsBase, metaCol, 1);
+      let minNeedCol = 1;
+      if (willApplyLegacyMeta && metaCol != null && metaCol >= 1) minNeedCol = Math.max(minNeedCol, metaCol);
+      if (willApplySourceOnly || willApplyRunFilter) {
+        if (sourceCol != null && sourceCol >= 1) minNeedCol = Math.max(minNeedCol, sourceCol);
+      }
+      if (willApplyRunFilter) {
+        if (dateAddedCol != null && dateAddedCol >= 1) minNeedCol = Math.max(minNeedCol, dateAddedCol);
+      }
+      numColsForFilter = Math.max(numColsBase, minNeedCol, 1);
       if (maxCols > 0) {
         numColsForFilter = Math.min(numColsForFilter, maxCols);
       }
@@ -728,32 +767,68 @@ function amzApplyTransactionsSortAndFilterCore_(ss, sheet, tillerCols, tillerLab
 
       if (lastRowForFilter < 1 || numColsForFilter < 1) {
         lines.push(
-          "Warning: Metadata filter skipped: invalid dimensions (lastRowForFilter=" +
+          "Warning: Transactions filter skipped: invalid dimensions (lastRowForFilter=" +
             lastRowForFilter +
             " numColsForFilter=" +
             numColsForFilter +
             ")."
         );
-      } else if (metaCol > numColsForFilter) {
+      } else if (minNeedCol > numColsForFilter) {
         lines.push(
-          "Warning: Metadata filter skipped: Metadata column " +
-            metaCol +
-            " exceeds usable filter width " +
+          "Warning: Transactions filter skipped: required column exceeds usable width (need col " +
+            minNeedCol +
+            " filterCols=" +
             numColsForFilter +
-            " (maxCols=" +
+            " maxCols=" +
             maxCols +
             ")."
         );
+      } else if (
+        willApplyLegacyMeta &&
+        (!metaCol || metaCol < 1 || metaCol > numColsForFilter)
+      ) {
+        lines.push("Warning: Metadata filter skipped: Metadata column missing or out of range.");
+      } else if (
+        (willApplySourceOnly || willApplyRunFilter) &&
+        (!sourceCol || sourceCol < 1 || sourceCol > numColsForFilter)
+      ) {
+        lines.push('Warning: Transactions filter skipped: Source column missing (add "Source" and AMZ Import SOURCE row).');
+      } else if (
+        willApplyRunFilter &&
+        (!dateAddedCol || dateAddedCol < 1 || dateAddedCol > numColsForFilter)
+      ) {
+        lines.push("Warning: Transactions filter skipped: Date Added column missing or out of range.");
       } else {
         const dataRange = sh.getRange(1, 1, lastRowForFilter, numColsForFilter);
         const filter = dataRange.createFilter();
-        const criteria = SpreadsheetApp.newFilterCriteria().whenTextContains(filterSubstr).build();
-        const colInRange = metaCol - dataRange.getColumn() + 1;
-        filter.setColumnFilterCriteria(colInRange, criteria);
+        if (willApplyLegacyMeta) {
+          const criteria = SpreadsheetApp.newFilterCriteria().whenTextContains(legacyMeta).build();
+          const colInRange = metaCol - dataRange.getColumn() + 1;
+          filter.setColumnFilterCriteria(colInRange, criteria);
+        } else {
+          const srcCrit = SpreadsheetApp.newFilterCriteria()
+            .whenTextEqualTo(AMZ_TRANSACTIONS_SOURCE_VALUE)
+            .build();
+          filter.setColumnFilterCriteria(sourceCol - dataRange.getColumn() + 1, srcCrit);
+          if (willApplyRunFilter) {
+            const runDate = amzParseImportTimestampToDate(importTs);
+            const tz = amzActiveSpreadsheetTimeZoneOrDefault_();
+            let serial = amzSheetsDateTimeSerialInTimeZone_(runDate, tz);
+            if (serial === "" || (typeof serial === "number" && isNaN(serial))) {
+              lines.push("Warning: Date Added filter skipped: could not compute serial for import timestamp.");
+            } else {
+              if (typeof serial === "number") {
+                serial = Math.round(serial * 1e10) / 1e10;
+              }
+              const daCrit = SpreadsheetApp.newFilterCriteria().whenNumberEqualTo(serial).build();
+              filter.setColumnFilterCriteria(dateAddedCol - dataRange.getColumn() + 1, daCrit);
+            }
+          }
+        }
       }
     } catch (e) {
       let msg =
-        "Warning: Metadata filter failed: " +
+        "Warning: Transactions filter failed: " +
         (e.message || String(e)) +
         " (lastRow=" +
         lastRowRaw +
@@ -763,8 +838,6 @@ function amzApplyTransactionsSortAndFilterCore_(ss, sheet, tillerCols, tillerLab
         numColsForFilter +
         " maxCols=" +
         maxCols +
-        " metaCol=" +
-        metaCol +
         ")";
       if (maxRows === 0 || maxCols === 0) {
         msg +=
@@ -778,11 +851,11 @@ function amzApplyTransactionsSortAndFilterCore_(ss, sheet, tillerCols, tillerLab
 }
 
 /**
- * Sort Transactions by Date (desc) and set Metadata filter to this import run.
+ * Sort Transactions by Date (desc) and apply post-import filter (Source + Date Added, or legacy Metadata substring).
  * Loads AMZ Import config and Transactions sheet — use amzApplyTransactionsSortAndFilterCore_ from import paths
  * that already have sheet/tillerCols to avoid a second config read.
- * @param {string} importTimestampStr - Substring for Metadata filter (typically yyyy-MM-dd HH:mm:ss for this run).
- * @param {{ metadataFilterContains?: string }|undefined} opts - If set, overrides filter text (TestFilterSort only).
+ * @param {string} importTimestampStr - Run id for Date Added filter (yyyy-MM-dd HH:mm:ss).
+ * @param {{ metadataFilterContains?: string, sourceFilterOnly?: boolean }|undefined} opts - Test: {@code sourceFilterOnly}; legacy: {@code metadataFilterContains}.
  * @returns {Array<string>} Log lines for the sidebar
  */
 function amzApplyTransactionsSortAndFilter(importTimestampStr, opts) {
@@ -799,24 +872,26 @@ function amzApplyTransactionsSortAndFilter(importTimestampStr, opts) {
   if (amzGetTillerColumnIndex_(tillerCols, tillerLabels.DATE) == null) {
     return ["Error: Transactions sheet is missing Date column."];
   }
-  let filterSubstr = "";
-  if (opts && opts.metadataFilterContains != null) {
-    filterSubstr = String(opts.metadataFilterContains).trim();
+  let filterSpec = null;
+  if (opts && opts.sourceFilterOnly === true) {
+    filterSpec = { sourceFilterOnly: true };
+  } else if (opts && opts.metadataFilterContains != null) {
+    filterSpec = { legacyMetadataContains: String(opts.metadataFilterContains).trim() };
   } else {
-    filterSubstr = String(importTimestampStr || "").trim();
+    const t = String(importTimestampStr || "").trim();
+    filterSpec = t ? { importTimestampStr: t } : null;
   }
-  return amzApplyTransactionsSortAndFilterCore_(ss, sheet, tillerCols, tillerLabels, sheetName, filterSubstr);
+  return amzApplyTransactionsSortAndFilterCore_(ss, sheet, tillerCols, tillerLabels, sheetName, filterSpec);
 }
 
 /**
- * Sidebar troubleshooting: re-run sort + Metadata filter without re-importing.
- * Uses a broad Metadata filter substring so any Amazon CSV import row matches.
+ * Sidebar troubleshooting: re-run sort + Source filter without re-importing.
+ * Shows all rows with Source = {@link AMZ_TRANSACTIONS_SOURCE_VALUE}.
  * @returns {string} Log text for the sidebar
  */
 function TestFilterSort() {
   const lines = [];
   lines.push("=== TestFilterSort ===");
-  const AMZ_TEST_METADATA_FILTER = "Imported by AmazonCSVImporter";
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const amzResult = getOrCreateAmzImportSheet();
   const config = readAmzImportConfig(amzResult.sheet);
@@ -833,23 +908,23 @@ function TestFilterSort() {
     return lines.join("\n");
   }
   const tillerCols = amzGetTillerColumnMap(sheet);
-  const metaCol = amzGetTillerColumnIndex_(tillerCols, tillerLabels.METADATA);
-  if (!metaCol) {
+  const srcCol = amzGetTillerColumnIndex_(tillerCols, tillerLabels.SOURCE);
+  if (!srcCol) {
     lines.push(
-      "Error: Metadata column not found (Tiller label: \"" + String(tillerLabels.METADATA) + "\")."
+      "Error: Source column not found (Tiller label: \"" + String(tillerLabels.SOURCE) + "\")."
     );
     return lines.join("\n");
   }
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) {
     lines.push("No transaction rows below the header.");
-    lines.push("Running sort only (no Metadata filter).");
+    lines.push("Running sort only (no filter).");
     const post = amzApplyTransactionsSortAndFilter("");
     for (let pi = 0; pi < post.length; pi++) lines.push(post[pi]);
     return lines.join("\n");
   }
-  lines.push("Metadata filter (test): text contains \"" + AMZ_TEST_METADATA_FILTER + "\"");
-  const post = amzApplyTransactionsSortAndFilter("", { metadataFilterContains: AMZ_TEST_METADATA_FILTER });
+  lines.push("Filter (test): Source equals \"" + AMZ_TRANSACTIONS_SOURCE_VALUE + "\"");
+  const post = amzApplyTransactionsSortAndFilter("", { sourceFilterOnly: true });
   for (let pi = 0; pi < post.length; pi++) lines.push(post[pi]);
   return lines.join("\n");
 }
@@ -913,18 +988,18 @@ function amzPaymentTypeHasRow(paymentAccounts, paymentTypeFromCsv) {
 }
 
 /**
- * ZIP / sidebar: offset category may be a real name or "" (Uncategorized — no Category on offset rows).
+ * ZIP / sidebar: offset category may be a real name or "" (Blank — no Category on offset rows).
  * Rejects only {@link AMZ_OFFSET_CATEGORY_SELECT_VALUE} ("-- Select Value --") and missing payload field.
  * @param {*} offsetCategoryRaw - {@code payload.offsetCategory} / bundle field
  * @returns {string|null} error message, or null if ok
  */
 function amzValidateBundleOffsetCategory_(offsetCategoryRaw) {
   if (offsetCategoryRaw == null) {
-    return 'Select a Category for offsets from the dropdown ("-- Select Value --" is not valid).';
+    return 'Choose Blank or a category for offset rows—not “-- Select Value --”.';
   }
   const s = String(offsetCategoryRaw).trim();
   if (s === AMZ_OFFSET_CATEGORY_SELECT_VALUE) {
-    return 'Select a Category for offsets from the dropdown ("-- Select Value --" is not valid).';
+    return 'Choose Blank or a category for offset rows—not “-- Select Value --”.';
   }
   return null;
 }
@@ -954,7 +1029,7 @@ const AMZ_SIDEBAR_WELCOME_PROP = "AMZ_SIDEBAR_WELCOME_BANNER";
 function getAmazonSidebarInit() {
   const d = new Date();
   d.setDate(d.getDate() - 180);
-  const tz = Session.getScriptTimeZone();
+  const tz = amzActiveSpreadsheetTimeZoneOrDefault_();
   const defaultCutoffIso = Utilities.formatDate(d, tz, "yyyy-MM-dd");
   const props = PropertiesService.getScriptProperties();
   const showBanner = props.getProperty(AMZ_SIDEBAR_WELCOME_PROP) === "1";
@@ -1179,6 +1254,36 @@ function amzActiveSpreadsheetTimeZoneOrDefault_() {
 }
 
 /**
+ * Import run clock string for metadata {@code importRunAt} and bundle options — always **spreadsheet** timezone
+ * so it matches {@link amzSheetsDateTimeSerialInTimeZone_} on Date Added (not {@link Session#getScriptTimeZone}).
+ * @param {Date} runTimestamp
+ * @returns {string}
+ */
+function amzFormatImportTimestampStr_(runTimestamp) {
+  return Utilities.formatDate(runTimestamp, amzActiveSpreadsheetTimeZoneOrDefault_(), "yyyy-MM-dd HH:mm:ss");
+}
+
+/** Log line prefix; row count is summed by {@link amzImportCommitCountFromLog_} for sidebar summaries. */
+const AMZ_IMPORT_COMMIT_COUNT_PREFIX = "AMZ_IMPORT_COMMIT_COUNT:";
+
+/**
+ * @param {string} logText
+ * @returns {number}
+ */
+function amzImportCommitCountFromLog_(logText) {
+  if (logText == null || logText === "") return 0;
+  let sum = 0;
+  const re = /AMZ_IMPORT_COMMIT_COUNT:(\d+)/g;
+  let m;
+  const s = String(logText);
+  while ((m = re.exec(s)) !== null) {
+    const n = Number(m[1]);
+    if (!isNaN(n)) sum += n;
+  }
+  return sum;
+}
+
+/**
  * Calendar date at local midnight for instant {@code d} in timezone {@code tz} (not the transaction “order” date).
  * @param {Date} d
  * @param {string} tz - e.g. {@link Spreadsheet#getSpreadsheetTimeZone}
@@ -1194,13 +1299,17 @@ function amzCalendarDateInTimeZone_(d, tz) {
   return out;
 }
 
-/** Date Added column: **today’s** calendar date in the **spreadsheet** timezone when the import runs (not {@code bundleImportTimestampIso}). */
+/**
+ * Calendar date (midnight) in the **spreadsheet** timezone for “today.”
+ * Amazon import rows instead use {@code runTimestamp} → full datetime serial on Date Added for per-run filtering.
+ */
 function amzDateAddedForImportRun_() {
   return amzCalendarDateInTimeZone_(new Date(), amzActiveSpreadsheetTimeZoneOrDefault_());
 }
 
 /**
- * Google Sheets / Excel serial date (days since 1899-12-30) for local calendar Y/M/D in {@link Session#getScriptTimeZone}.
+ * Google Sheets / Excel serial date (days since 1899-12-30) for local calendar Y/M/D in the **active spreadsheet** timezone
+ * ({@link Spreadsheet#getSpreadsheetTimeZone}), matching sheet display and {@code NOW()}, not {@link Session#getScriptTimeZone}.
  *
  * Why not pass JS Date into {@code Range#setValues}? On some Transactions sheets the Date and Week columns are
  * formatted or treated such that {@code setValues} with a Date leaves the cell empty on readback, while Amount
@@ -1212,25 +1321,83 @@ function amzDateAddedForImportRun_() {
  * @returns {number|string} serial, or "" if invalid
  */
 function amzSheetsDateSerial_(d) {
-  return amzSheetsDateSerialInTimeZone_(d, Session.getScriptTimeZone());
+  return amzSheetsDateSerialInTimeZone_(d, amzActiveSpreadsheetTimeZoneOrDefault_());
 }
 
 /**
  * Like {@link amzSheetsDateSerial_} but calendar Y/M/D for {@code d} are taken in {@code tz} (match spreadsheet display).
+ * Uses {@link Utilities#parseDate} for midnight in {@code tz}; {@code new Date(y,m,d)} would use the script runtime TZ and
+ * skew Date Added vs {@code NOW()} when script TZ ≠ spreadsheet TZ (often ~1 hour with US zones or DST quirks).
  * @param {Date} d
  * @param {string} tz
  * @returns {number|string}
  */
 function amzSheetsDateSerialInTimeZone_(d, tz) {
   if (!(d instanceof Date) || isNaN(d.getTime())) return "";
-  const y = Number(Utilities.formatDate(d, tz, "yyyy"));
-  const mo = Number(Utilities.formatDate(d, tz, "M"));
-  const da = Number(Utilities.formatDate(d, tz, "d"));
-  const anchor = new Date(1899, 11, 30);
-  anchor.setHours(0, 0, 0, 0);
-  const cal = new Date(y, mo - 1, da);
-  cal.setHours(0, 0, 0, 0);
-  return (cal.getTime() - anchor.getTime()) / 86400000;
+  const y = Utilities.formatDate(d, tz, "yyyy");
+  const mo = Utilities.formatDate(d, tz, "MM");
+  const da = Utilities.formatDate(d, tz, "dd");
+  const midnightStr = y + "-" + mo + "-" + da + " 00:00:00";
+  try {
+    const cal = Utilities.parseDate(midnightStr, tz, "yyyy-MM-dd HH:mm:ss");
+    const anchorMs = amzSheetsSerialAnchorMsInTimeZone_(tz);
+    return (cal.getTime() - anchorMs) / 86400000;
+  } catch (e) {
+    return "";
+  }
+}
+
+/**
+ * Sheets serial for a full date+time in {@code tz}. Same epoch as {@link amzSheetsDateSerialInTimeZone_}.
+ * Used for Date Added on Amazon import rows so post-import filters can match the run instant with {@code whenNumberEqualTo}.
+ * @param {Date} d
+ * @param {string} tz
+ * @returns {number|string}
+ */
+function amzSheetsDateTimeSerialInTimeZone_(d, tz) {
+  if (!(d instanceof Date) || isNaN(d.getTime())) return "";
+  const y = Utilities.formatDate(d, tz, "yyyy");
+  const mo = Utilities.formatDate(d, tz, "MM");
+  const da = Utilities.formatDate(d, tz, "dd");
+  const HH = Utilities.formatDate(d, tz, "HH");
+  const mm = Utilities.formatDate(d, tz, "mm");
+  const ss = Utilities.formatDate(d, tz, "ss");
+  const str = y + "-" + mo + "-" + da + " " + HH + ":" + mm + ":" + ss;
+  try {
+    const instant = Utilities.parseDate(str, tz, "yyyy-MM-dd HH:mm:ss");
+    const anchorMs = amzSheetsSerialAnchorMsInTimeZone_(tz);
+    return (instant.getTime() - anchorMs) / 86400000;
+  } catch (e) {
+    return "";
+  }
+}
+
+/**
+ * Milliseconds for Sheets serial 0: 1899-12-30 00:00:00 interpreted in {@code tz}.
+ * @param {string} tz
+ * @returns {number}
+ */
+function amzSheetsSerialAnchorMsInTimeZone_(tz) {
+  try {
+    return Utilities.parseDate("1899-12-30 00:00:00", tz, "yyyy-MM-dd HH:mm:ss").getTime();
+  } catch (e) {
+    const anchor = new Date(1899, 11, 30);
+    anchor.setHours(0, 0, 0, 0);
+    return anchor.getTime();
+  }
+}
+
+/**
+ * Metadata cell value: JSON only (starts with "{"), with {@code importRunAt} for grep and legacy substring filters.
+ * @param {Object} amazonInner - object stored under {@code amazon}
+ * @param {string} importTimestampStr
+ * @returns {string}
+ */
+function amzImportMetadataJson_(amazonInner, importTimestampStr) {
+  return JSON.stringify({
+    amazon: amazonInner,
+    importRunAt: String(importTimestampStr || "").trim()
+  });
 }
 
 /**
@@ -1251,7 +1418,7 @@ function amzCoercePaddedRowsDateWeekToSerial_(padded, ci) {
     if (row[di] instanceof Date && !isNaN(row[di].getTime())) row[di] = amzSheetsDateSerial_(row[di]);
     if (row[wi] instanceof Date && !isNaN(row[wi].getTime())) row[wi] = amzSheetsDateSerial_(row[wi]);
     if (ai >= 0 && row[ai] instanceof Date && !isNaN(row[ai].getTime()))
-      row[ai] = amzSheetsDateSerialInTimeZone_(row[ai], addedTz);
+      row[ai] = amzSheetsDateTimeSerialInTimeZone_(row[ai], addedTz);
   }
 }
 
@@ -1442,6 +1609,7 @@ function amzTransactionsColumnDebugLines(sheet, tillerCols, tillerLabels, numCol
   const amountCol = amzGetTillerColumnIndex_(tillerCols, tillerLabels.AMOUNT);
   const txnIdCol = amzGetTillerColumnIndex_(tillerCols, tillerLabels.TRANSACTION_ID);
   const acctCol = amzGetTillerColumnIndex_(tillerCols, tillerLabels.ACCOUNT);
+  const sourceCol = amzGetTillerColumnIndex_(tillerCols, tillerLabels.SOURCE);
 
   let dh = "";
   if (dateCol != null && dateCol >= 1) {
@@ -1475,6 +1643,8 @@ function amzTransactionsColumnDebugLines(sheet, tillerCols, tillerLabels, numCol
       txnIdCol +
       " Account: " +
       acctCol +
+      " Source: " +
+      sourceCol +
       " numCols: " +
       numCols +
       " dateInRange: " +
@@ -2265,7 +2435,7 @@ function openAmazonOrdersSidebar() {
     const targetSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(config.tillerLabels.SHEET_NAME);
     if (targetSheet) targetSheet.activate();
   }
-  const html = HtmlService.createHtmlOutputFromFile("AmazonOrdersSidebar").setTitle("Tiller Amazon Import");
+  const html = HtmlService.createHtmlOutputFromFile("AmazonOrdersSidebar").setTitle("Tiller™ Amazon Import");
   SpreadsheetApp.getUi().showSidebar(html);
 }
 
@@ -2425,19 +2595,19 @@ function importAmazonRecent(csvText, months, options) {
   let duplicateCount = 0;
   const skippedRowDump = { n: 0 };
   let runTimestamp = new Date();
-  let importTimestampStr = Utilities.formatDate(runTimestamp, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+  let importTimestampStr = amzFormatImportTimestampStr_(runTimestamp);
   if (opts.bundleImportTimestampIso) {
     importTimestampStr = String(opts.bundleImportTimestampIso).trim();
     runTimestamp = amzParseImportTimestampToDate(importTimestampStr);
   }
-  const dateAddedCalendar = amzDateAddedForImportRun_();
+  const dateAddedForRun = new Date(runTimestamp.getTime());
 
   const tLoopStart = Date.now();
   const csvDataRowCount = csv.length - 1;
   let aggregatedOrderCount = 0;
 
   function pushOneRow(r, rowsForMeta, orderDate, orderID, productName, asin, amount, accountRow, payKey) {
-    const month = Utilities.formatDate(orderDate, Session.getScriptTimeZone(), "yyyy-MM");
+    const month = Utilities.formatDate(orderDate, amzActiveSpreadsheetTimeZoneOrDefault_(), "yyyy-MM");
     const week = amzGetWeekStartDate(orderDate);
     const descShort = amzFormatPurchaseDescription_(isDigital, productName);
     const descFull = amzFormatPurchaseFullDescription_(isDigital, orderID, productName, asin);
@@ -2468,14 +2638,15 @@ function importAmazonRecent(csvText, months, options) {
       amazonMeta.id = String(orderID == null ? "" : orderID).trim();
       amazonMeta.asin = String(asin == null ? "" : asin).trim();
     }
-    const metadataValue = "Imported by AmazonCSVImporter on " + importTimestampStr + " " + JSON.stringify({ amazon: amazonMeta });
+    const metadataValue = amzImportMetadataJson_(amazonMeta, importTimestampStr);
 
     const rowOut = new Array(numCols).fill("");
     amzSetRowDescriptionFields_(rowOut, tillerCols, tillerLabels, descShort, descFull);
     rowOut[ci.DATE - 1] = orderDate;
     rowOut[ci.AMOUNT - 1] = amount;
     rowOut[ci.TRANSACTION_ID - 1] = amzGenerateGuid();
-    rowOut[ci.DATE_ADDED - 1] = dateAddedCalendar;
+    rowOut[ci.DATE_ADDED - 1] = dateAddedForRun;
+    rowOut[ci.SOURCE - 1] = AMZ_TRANSACTIONS_SOURCE_VALUE;
     rowOut[ci.MONTH - 1] = month;
     rowOut[ci.WEEK - 1] = week;
     rowOut[ci.ACCOUNT - 1] = accountRow.ACCOUNT;
@@ -2667,7 +2838,7 @@ function importAmazonRecent(csvText, months, options) {
 
     const orderDateForOffset = new Date(po.orderDate.getTime());
     orderDateForOffset.setHours(0, 0, 0, 0);
-    const offMonth = Utilities.formatDate(orderDateForOffset, Session.getScriptTimeZone(), "yyyy-MM");
+    const offMonth = Utilities.formatDate(orderDateForOffset, amzActiveSpreadsheetTimeZoneOrDefault_(), "yyyy-MM");
     const offWeek = amzGetWeekStartDate(orderDateForOffset);
 
     const itemCountForOffset =
@@ -2678,21 +2849,18 @@ function importAmazonRecent(csvText, months, options) {
     offset[ci.DATE - 1] = orderDateForOffset;
     offset[ci.AMOUNT - 1] = Math.abs(total);
     offset[ci.TRANSACTION_ID - 1] = amzGenerateGuid();
-    offset[ci.DATE_ADDED - 1] = dateAddedCalendar;
+    offset[ci.DATE_ADDED - 1] = dateAddedForRun;
     offset[ci.MONTH - 1] = offMonth;
     offset[ci.WEEK - 1] = offWeek;
     offset[ci.ACCOUNT - 1] = accountRow.ACCOUNT;
     offset[ci.ACCOUNT_NUMBER - 1] = accountRow.ACCOUNT_NUMBER;
     offset[ci.INSTITUTION - 1] = accountRow.INSTITUTION;
     offset[ci.ACCOUNT_ID - 1] = accountRow.ACCOUNT_ID;
+    offset[ci.SOURCE - 1] = AMZ_TRANSACTIONS_SOURCE_VALUE;
     const offsetAmazonMeta = isDigital
       ? { id: String(oidKey), type: "digital-purchase-offset", lineItemCount: itemCountForOffset }
       : { id: String(oidKey), type: "purchase-offset", lineItemCount: itemCountForOffset };
-    offset[ci.METADATA - 1] =
-      "Imported by AmazonCSVImporter on " +
-      importTimestampStr +
-      " " +
-      JSON.stringify({ amazon: offsetAmazonMeta });
+    offset[ci.METADATA - 1] = amzImportMetadataJson_(offsetAmazonMeta, importTimestampStr);
     if (offsetCategory && categoryColNum) {
       offset[categoryColNum - 1] = offsetCategory;
     }
@@ -2715,6 +2883,7 @@ function importAmazonRecent(csvText, months, options) {
 
   sheet.getRange(startRow, 1, padded.length, writeCols).setValues(padded);
   SpreadsheetApp.flush();
+  timing.push(AMZ_IMPORT_COMMIT_COUNT_PREFIX + padded.length);
   const tWriteEnd = Date.now();
   timing.push(
     "Server: write new rows to sheet (" + output.length + " import" +
@@ -2889,12 +3058,12 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
   const output = [];
   const perOrderOffset = {};
   let runTimestamp = new Date();
-  let importTimestampStr = Utilities.formatDate(runTimestamp, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+  let importTimestampStr = amzFormatImportTimestampStr_(runTimestamp);
   if (opts.bundleImportTimestampIso) {
     importTimestampStr = String(opts.bundleImportTimestampIso).trim();
     runTimestamp = amzParseImportTimestampToDate(importTimestampStr);
   }
-  const dateAddedCalendar = amzDateAddedForImportRun_();
+  const dateAddedForRun = new Date(runTimestamp.getTime());
   let duplicateCount = 0;
   const payKey = "Digital";
 
@@ -2945,17 +3114,17 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
     const accountRow = amzResolveDigitalReturnAccountRow(orderID, paymentByOrder, paymentAccounts, config.digitalUserAccount);
 
     const amazonMeta = { id: String(orderID), asin: String(asin || ""), type: "digital-return" };
-    const metadataValue =
-      "Imported by AmazonCSVImporter on " + importTimestampStr + " " + JSON.stringify({ amazon: amazonMeta });
+    const metadataValue = amzImportMetadataJson_(amazonMeta, importTimestampStr);
 
-    const month = Utilities.formatDate(orderDate, Session.getScriptTimeZone(), "yyyy-MM");
+    const month = Utilities.formatDate(orderDate, amzActiveSpreadsheetTimeZoneOrDefault_(), "yyyy-MM");
     const week = amzGetWeekStartDate(orderDate);
     const rowOut = new Array(numCols).fill("");
     amzSetRowDescriptionFields_(rowOut, tillerCols, tillerLabels, AMZ_DESC_DIGITAL_REFUND, AMZ_DESC_DIGITAL_REFUND);
     rowOut[ciDr.DATE - 1] = orderDate;
     rowOut[ciDr.AMOUNT - 1] = amount;
     rowOut[ciDr.TRANSACTION_ID - 1] = amzGenerateGuid();
-    rowOut[ciDr.DATE_ADDED - 1] = dateAddedCalendar;
+    rowOut[ciDr.DATE_ADDED - 1] = dateAddedForRun;
+    rowOut[ciDr.SOURCE - 1] = AMZ_TRANSACTIONS_SOURCE_VALUE;
     rowOut[ciDr.MONTH - 1] = month;
     rowOut[ciDr.WEEK - 1] = week;
     rowOut[ciDr.ACCOUNT - 1] = accountRow.ACCOUNT;
@@ -2998,7 +3167,7 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
     if (total === 0) continue;
     const orderDateForOffset = new Date(po.orderDate.getTime());
     orderDateForOffset.setHours(0, 0, 0, 0);
-    const offMonth = Utilities.formatDate(orderDateForOffset, Session.getScriptTimeZone(), "yyyy-MM");
+    const offMonth = Utilities.formatDate(orderDateForOffset, amzActiveSpreadsheetTimeZoneOrDefault_(), "yyyy-MM");
     const offWeek = amzGetWeekStartDate(orderDateForOffset);
     const offset = new Array(numCols).fill("");
     const digRetOffDesc = amzFormatDigitalReturnOffsetLine_(oidKey);
@@ -3006,7 +3175,7 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
     offset[ciDr.DATE - 1] = orderDateForOffset;
     offset[ciDr.AMOUNT - 1] = Math.abs(total);
     offset[ciDr.TRANSACTION_ID - 1] = amzGenerateGuid();
-    offset[ciDr.DATE_ADDED - 1] = dateAddedCalendar;
+    offset[ciDr.DATE_ADDED - 1] = dateAddedForRun;
     offset[ciDr.MONTH - 1] = offMonth;
     offset[ciDr.WEEK - 1] = offWeek;
     const offsetAcct = amzResolveDigitalReturnAccountRow(oidKey, paymentByOrder, paymentAccounts, config.digitalUserAccount);
@@ -3014,9 +3183,9 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
     offset[ciDr.ACCOUNT_NUMBER - 1] = offsetAcct.ACCOUNT_NUMBER;
     offset[ciDr.INSTITUTION - 1] = offsetAcct.INSTITUTION;
     offset[ciDr.ACCOUNT_ID - 1] = offsetAcct.ACCOUNT_ID;
+    offset[ciDr.SOURCE - 1] = AMZ_TRANSACTIONS_SOURCE_VALUE;
     const digRetOffMeta = { id: String(oidKey), type: "digital-return-offset" };
-    offset[ciDr.METADATA - 1] =
-      "Imported by AmazonCSVImporter on " + importTimestampStr + " " + JSON.stringify({ amazon: digRetOffMeta });
+    offset[ciDr.METADATA - 1] = amzImportMetadataJson_(digRetOffMeta, importTimestampStr);
     if (offsetCategory && categoryColNum) {
       offset[categoryColNum - 1] = offsetCategory;
     }
@@ -3037,6 +3206,7 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
   amzCoercePaddedRowsDateWeekToSerial_(padded, ciDr); /* see amzSheetsDateSerial_ */
   sheet.getRange(startRow, 1, padded.length, writeCols).setValues(padded);
   SpreadsheetApp.flush();
+  timing.push(AMZ_IMPORT_COMMIT_COUNT_PREFIX + padded.length);
 
   if (!deferPost) {
     const postLines = amzApplyTransactionsSortAndFilterCore_(
@@ -3204,12 +3374,12 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
   const output = [];
   const perOrderOffset = {};
   let runTimestamp = new Date();
-  let importTimestampStr = Utilities.formatDate(runTimestamp, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+  let importTimestampStr = amzFormatImportTimestampStr_(runTimestamp);
   if (opts.bundleImportTimestampIso) {
     importTimestampStr = String(opts.bundleImportTimestampIso).trim();
     runTimestamp = amzParseImportTimestampToDate(importTimestampStr);
   }
-  const dateAddedCalendar = amzDateAddedForImportRun_();
+  const dateAddedForRun = new Date(runTimestamp.getTime());
   let duplicateCount = 0;
   let skippedInvalidRefundDate = 0;
 
@@ -3281,10 +3451,9 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
       website: websiteVal,
       type: "refund-detail"
     };
-    const metadataValue =
-      "Imported by AmazonCSVImporter on " + importTimestampStr + " " + JSON.stringify({ amazon: amazonMeta });
+    const metadataValue = amzImportMetadataJson_(amazonMeta, importTimestampStr);
 
-    const month = Utilities.formatDate(orderDate, Session.getScriptTimeZone(), "yyyy-MM");
+    const month = Utilities.formatDate(orderDate, amzActiveSpreadsheetTimeZoneOrDefault_(), "yyyy-MM");
     const week = amzGetWeekStartDate(orderDate);
     const rowOut = new Array(numCols).fill("");
     const refundDescLine = amzFormatPhysicalRefundFullDescription_(orderID);
@@ -3292,7 +3461,8 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     rowOut[ciRd.DATE - 1] = orderDate;
     rowOut[ciRd.AMOUNT - 1] = amount;
     rowOut[ciRd.TRANSACTION_ID - 1] = amzGenerateGuid();
-    rowOut[ciRd.DATE_ADDED - 1] = dateAddedCalendar;
+    rowOut[ciRd.DATE_ADDED - 1] = dateAddedForRun;
+    rowOut[ciRd.SOURCE - 1] = AMZ_TRANSACTIONS_SOURCE_VALUE;
     rowOut[ciRd.MONTH - 1] = month;
     rowOut[ciRd.WEEK - 1] = week;
     rowOut[ciRd.ACCOUNT - 1] = accountRow.ACCOUNT;
@@ -3350,7 +3520,7 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     if (total === 0) continue;
     const orderDateForOffset = new Date(po.orderDate.getTime());
     orderDateForOffset.setHours(0, 0, 0, 0);
-    const offMonth = Utilities.formatDate(orderDateForOffset, Session.getScriptTimeZone(), "yyyy-MM");
+    const offMonth = Utilities.formatDate(orderDateForOffset, amzActiveSpreadsheetTimeZoneOrDefault_(), "yyyy-MM");
     const offWeek = amzGetWeekStartDate(orderDateForOffset);
     const offset = new Array(numCols).fill("");
     const physRefOffDesc = amzFormatPhysicalRefundOffsetLine_(oidKey);
@@ -3358,7 +3528,7 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     offset[ciRd.DATE - 1] = orderDateForOffset;
     offset[ciRd.AMOUNT - 1] = -Math.abs(total);
     offset[ciRd.TRANSACTION_ID - 1] = amzGenerateGuid();
-    offset[ciRd.DATE_ADDED - 1] = dateAddedCalendar;
+    offset[ciRd.DATE_ADDED - 1] = dateAddedForRun;
     offset[ciRd.MONTH - 1] = offMonth;
     offset[ciRd.WEEK - 1] = offWeek;
     const payHint = paymentByOrder[oidKey] != null ? String(paymentByOrder[oidKey]).trim() : "";
@@ -3367,9 +3537,9 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     offset[ciRd.ACCOUNT_NUMBER - 1] = acct.ACCOUNT_NUMBER;
     offset[ciRd.INSTITUTION - 1] = acct.INSTITUTION;
     offset[ciRd.ACCOUNT_ID - 1] = acct.ACCOUNT_ID;
+    offset[ciRd.SOURCE - 1] = AMZ_TRANSACTIONS_SOURCE_VALUE;
     const physRefOffMeta = { id: String(oidKey), type: "physical-refund-offset" };
-    offset[ciRd.METADATA - 1] =
-      "Imported by AmazonCSVImporter on " + importTimestampStr + " " + JSON.stringify({ amazon: physRefOffMeta });
+    offset[ciRd.METADATA - 1] = amzImportMetadataJson_(physRefOffMeta, importTimestampStr);
     if (offsetCategory && categoryColNum) {
       offset[categoryColNum - 1] = offsetCategory;
     }
@@ -3390,6 +3560,7 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
   amzCoercePaddedRowsDateWeekToSerial_(padded, ciRd); /* see amzSheetsDateSerial_ */
   sheet.getRange(startRow, 1, padded.length, writeCols).setValues(padded);
   SpreadsheetApp.flush();
+  timing.push(AMZ_IMPORT_COMMIT_COUNT_PREFIX + padded.length);
 
   if (!deferPost) {
     const postLines = amzApplyTransactionsSortAndFilterCore_(
@@ -3495,17 +3666,19 @@ function importAmazonBundleChunk(payloadJson) {
     ts = String(rawTs).trim();
   }
   if (!ts) {
-    ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+    ts = amzFormatImportTimestampStr_(new Date());
   }
   const optsStr = amzImportBundleOptsStr_(payload, ts);
 
   if (step === "finalize") {
     const postLog = amzImportBundleTransactionsPostLog_(ts);
+    const finLog = postLog.replace(/^\n+/, "");
     return {
       bundleImportTimestampIso: ts,
       step: step,
-      log: postLog.replace(/^\n+/, ""),
-      didImport: false
+      log: finLog,
+      didImport: false,
+      rowsWritten: amzImportCommitCountFromLog_(finLog)
     };
   }
 
@@ -3561,7 +3734,8 @@ function importAmazonBundleChunk(payloadJson) {
     bundleImportTimestampIso: ts,
     step: step,
     log: logText,
-    didImport: didImport
+    didImport: didImport,
+    rowsWritten: amzImportCommitCountFromLog_(logText)
   };
 }
 
@@ -3581,11 +3755,7 @@ function importAmazonBundle(bundleJson) {
   if (catErr0) return "Error: " + catErr0;
 
   const bundleStarted = new Date();
-  const bundleImportTimestampIso = Utilities.formatDate(
-    bundleStarted,
-    Session.getScriptTimeZone(),
-    "yyyy-MM-dd HH:mm:ss"
-  );
+  const bundleImportTimestampIso = amzFormatImportTimestampStr_(bundleStarted);
   const optsStr = amzImportBundleOptsStr_(bundle, bundleImportTimestampIso);
   const sections = [];
   let importRuns = 0;

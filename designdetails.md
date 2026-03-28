@@ -33,7 +33,7 @@ Google’s **Apps Script** limits how much data one browser→server call can ca
 - After ZIP extract, full CSV texts live in `state.files`.
 - Import builds an ordered **step list** (`orderHistory`, `digitalOrders`, `digitalReturns`, `refundDetails`) from checkboxes.
 - **`pump()`** sends **one** `importAmazonBundleChunk(JSON.stringify(payload))` per step. Each payload includes only the CSV string(s) needed for that step (e.g. `refundDetails` also sends trimmed `orderHistoryCsv` for payment join).
-- A final **`step: "finalize"`** call runs **sort + Metadata filter** once after all chunks (`importAmazonBundleChunk` in `amazonorders.gs`, `finalize` branch).
+- A final **`step: "finalize"`** call runs **sort + post-import filter** once after all chunks (`importAmazonBundleChunk` in `amazonorders.gs`, `finalize` branch).
 
 **Server (`amazonorders.gs`):**
 
@@ -77,7 +77,7 @@ Configuration is read by `readAmzImportConfig` and validated by `validateAmzImpo
 | **Tiller column labels** | Name in Code → Tiller label | Resolves **Transactions** column headers (sheet name, Date, Metadata, …) | All writers + dedup scan + sort/filter |
 | **In-code only** | — | e.g. `AMZ_DEFAULT_TILLER_LABEL_DATE_ADDED` (default `"Date Added"`; often column **P** in Tiller’s template—position is **not** hard-coded), `AMZ_WHOLE_FOODS_WEBSITE` (`panda01`), description prefixes | Date Added header seed + imports; website filter |
 
-**Date Added on imported rows:** Every pipeline sets **Date Added** to the **calendar date the import runs** in the **spreadsheet timezone** (`Spreadsheet.getSpreadsheetTimeZone()`), via `amzDateAddedForImportRun_` / `amzActiveSpreadsheetTimeZoneOrDefault_` — not the Apps Script project timezone alone (they can differ and cause the wrong day or offset). It is not the Amazon order/refund date and not the `bundleImportTimestampIso` clock used in Metadata. The column is located by the **DATE_ADDED** row in TABLE4 (same as other Tiller labels). Batch `setValues` coerces Date Added to a sheet **serial** using that same spreadsheet timezone (`amzSheetsDateSerialInTimeZone_`); Date and Week still use `Session.getScriptTimeZone()` in `amzSheetsDateSerial_`.
+**Date Added on imported rows:** Every pipeline sets **Date Added** to the **same `runTimestamp` for that import run** (date + time), aligned with `importTimestampStr` / `bundleImportTimestampIso`, so the post-import filter can match via `whenNumberEqualTo` on the datetime serial. It is not the Amazon order/refund date. The column is located by the **DATE_ADDED** row in TABLE4. Batch `setValues` coerces Date Added with `amzSheetsDateTimeSerialInTimeZone_` in the spreadsheet timezone; Date and Week still use `Session.getScriptTimeZone()` in `amzSheetsDateSerial_`. **Source** is set to `AmazonCSV` on every inserted row (TABLE4 **SOURCE** row).
 
 ---
 
@@ -174,21 +174,19 @@ The **Metadata** column stores a prefix plus JSON. The inner **`amazon`** object
 
 **Multi-line digital orders:** `amzBuildAmazonMetadataObjectFromRows` sums columns that match total amount column for numeric keys; sets **`lineItemCount`**.
 
-**Envelope:** Prefix `Imported by AmazonCSVImporter on <timestamp> ` plus `JSON.stringify({ amazon: … })` on write.
-
-**Dedup** uses types/ids inside that `amazon` object (see §4).
+**Envelope:** `JSON.stringify({ amazon: … , importRunAt: "<timestamp>" })` on write (cell starts with `{`). Dedup still reads from `{` and uses **`amazon`** only (see §4).
 
 ---
 
-## 9. Sort order and Metadata filter (why this approach)
+## 9. Sort order and post-import filter (why this approach)
 
-After rows are appended, the sheet is sorted **newest date first** and a **filter** is applied on **Metadata** so you mostly see rows from **this import run**. The implementation removes any existing filter first, because sorting a filtered range can leave rows “stuck” in the wrong order on large sheets.
+After rows are appended, the sheet is sorted **newest date first** and a **filter** is applied so you mostly see rows from **this import run**. The implementation removes any existing filter first, because sorting a filtered range can leave rows “stuck” in the wrong order on large sheets.
 
 **Implemented in** `amzApplyTransactionsSortAndFilterCore_`:
 
 1. **Remove** any existing **basic filter** first — sorting while a filter is active can **block rows from moving** (“failure-prone” behavior called out in code comments).
 2. **Sort** data rows (row 2..last) by **Date descending** — prefer **`Range.sort`** on the data range for performance vs full-sheet sort on large grids; fallback to **`sheet.sort`** with optional temporary freeze row 1.
-3. **Create** a new basic filter on a range sized from **used columns + Metadata column**, with **whenTextContains** on the **import timestamp** substring so the sheet focuses on **this run’s** rows.
+3. **Create** a new basic filter: **Source** = `AmazonCSV` (`whenTextEqualTo`) and **Date Added** = the run’s datetime serial (`whenNumberEqualTo`, derived from the same `importTimestampStr` as written to rows). Legacy mode: **Metadata** `whenTextContains` for older prefixed cells. **TestFilterSort** applies Source only.
 
 **Why not rely on other methods:** Full-sheet sort / sort with active filter / fragile dimension reads caused real failures; code uses explicit **dimension clamping**, `amzEnsureSheetGridCovers`, and defensive **`getMaxRows`/`getMaxColumns`** handling to avoid **“coordinates outside dimensions”** when applying the filter.
 

@@ -136,10 +136,11 @@ For **Order History.csv** and **Digital Content Orders.csv**, file type is detec
 | **Full Description** | Longer line (often Order ID, title, ASIN where applicable) |
 | **Amount** | Line amount |
 | **Transaction ID** | New unique id |
-| **Date Added** | Import run time |
+| **Date Added** | Same instant for every row in that import run (date+time serial; used with post-import filter) |
 | **Account** | From **AMZ Import** by payment type or digital row |
 | **Account #** / **Institution** / **Account ID** | Same routing |
-| **Metadata** | `Imported by AmazonCSVImporter on <date/time>` plus JSON `{ "amazon": … }` — filter **contains** `Imported by AmazonCSVImporter` to find or remove imports |
+| **Source** | `AmazonCSV` on every row this add-on inserts |
+| **Metadata** | JSON only: `{ "amazon": … , "importRunAt": "<yyyy-MM-dd HH:mm:ss>" }` — cell starts with `{`. After import, filter uses **Source** + **Date Added** (this run); **TestFilterSort** uses Source only |
 
 Refund / return rows use pipeline-specific description patterns; metadata always carries a stable `type` for dedup.
 

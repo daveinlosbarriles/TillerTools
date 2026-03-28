@@ -1,14 +1,6 @@
 {
   "timeZone": "America/Los_Angeles",
-  "dependencies": {
-    "enabledAdvancedServices": [
-      {
-        "userSymbol": "Sheets",
-        "version": "v4",
-        "serviceId": "sheets"
-      }
-    ]
-  },
+  "dependencies": {},
   "exceptionLogging": "STACKDRIVER",
   "runtimeVersion": "V8",
   "oauthScopes": [
@@ -17,7 +9,7 @@
   ],
   "addOns": {
     "common": {
-      "name": "Tiller Tools",
+      "name": "Tiller™ Tools",
       "logoUrl": "https://raw.githubusercontent.com/daveinlosbarriles/TillerTools/master/assets/tiller-tools-logo.png",
       "layoutProperties": {
         "primaryColor": "#188038",
