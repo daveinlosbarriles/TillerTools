@@ -69,6 +69,14 @@
       flex: 0 1 auto; max-width: 11rem; min-width: 0;
       box-sizing: border-box;
     }
+    .inline-field-line.offset-category-field label {
+      white-space: nowrap;
+      flex: 0 0 auto;
+    }
+    .inline-field-line.offset-category-field select {
+      max-width: 8.25rem;
+      min-width: 5.5rem;
+    }
     .btn-row { margin: 4px 0 0 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
     button {
       padding: 4px 10px; font-size: 13px; cursor: pointer;
@@ -261,7 +269,7 @@
 
     <div class="row-with-help">
       <div class="main-col">
-        <div class="inline-field-line">
+        <div class="inline-field-line offset-category-field">
           <label for="offsetCat">Offset category <span class="offset-req-star" aria-hidden="true">*</span><span class="sr-only"> (required)</span></label>
           <select id="offsetCat">
             <option value="__AMZ_OFFSET_SELECT__">-- Select Value --</option>
