@@ -702,7 +702,7 @@
         return /^\s*===\s*.+\s*===\s*$/.test(String(s || "").trim());
       }
 
-      function partitionServerLogLines(raw, stepId) {
+      function partitionServerLogLines(raw) {
         var user = [];
         var debug = [];
         var lines = String(raw || "")
@@ -712,8 +712,7 @@
           var line = lines[i];
           if (/^\s*AMZ_IMPORT_COMMIT_COUNT:\d+\s*$/.test(line)) continue;
           if (isPipelineDebugOnlyLine(line)) {
-            if (stepId === "finalize" && /^\s*Server:\s*sort sheet\b/i.test(line)) user.push(line);
-            else debug.push(line);
+            debug.push(line);
           } else if (isPipelineSectionHeaderLine(line)) continue;
           else user.push(line);
         }
@@ -744,7 +743,6 @@
         } else if (step === "finalize") {
           s = s.replace(/^\s*===\s*Transactions sheet\s*===\s*$/i, "").trim();
           if (!s) return "";
-          s = s.replace(/^\s*Server:\s*sort sheet by Date:\s*/i, "Sorted Transactions by date in ");
         }
         return s;
       }
@@ -795,7 +793,7 @@
       }
 
       function appendRawLinesToPipeline(stepId, rawLog) {
-        var part = partitionServerLogLines(rawLog, stepId);
+        var part = partitionServerLogLines(rawLog);
         var showDbg = isImportDebugEnabled();
         var userShown = [];
         for (var u = 0; u < part.user.length; u++) {
