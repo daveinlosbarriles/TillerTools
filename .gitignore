@@ -1,4 +1,1 @@
 .DS_Store
-
-# Optional local clone of the old Amazon-only repo (nested git). Remove the folder if you no longer need it.
-TillerAmazonOrdersCSVImport/
