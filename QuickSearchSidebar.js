@@ -272,8 +272,9 @@ function buildQuickSearchFormula(tillerCols, criteriaColLetter, dateCol, descCol
     + "c_esc,REGEXREPLACE(c_no_blank,\"" + reEsc + "\",\"" + reRep + "\"),"
     + "c_match,IF(c_has_blank,\"(?i)^(\"&\"|\"&SUBSTITUTE(c_esc,\",\",\"|\")&\")$\",\"(?i)^(\"&SUBSTITUTE(c_esc,\",\",\"|\")&\")$\"),"
     + "q_match,\"(?i)^(\"&SUBSTITUTE(q_raw,\",\",\"|\")&\")$\","
-    + "x_include_raw,TRIM(IFERROR(INDEX(SPLIT(x_raw,\"{{NOT}}\"),1,1),x_raw)),"
-    + "x_exclude_raw,IFERROR(TRIM(INDEX(SPLIT(x_raw,\"{{NOT}}\"),1,2)),\"\"),"
+    // SPLIT must use FALSE: Sheets defaults split_by_each=TRUE, so delimiter "{{NOT}}" splits on each char including N — breaking plain "MN" into "M" only.
+    + "x_include_raw,TRIM(IFERROR(INDEX(SPLIT(x_raw,\"{{NOT}}\",FALSE),1,1),x_raw)),"
+    + "x_exclude_raw,IFERROR(TRIM(INDEX(SPLIT(x_raw,\"{{NOT}}\",FALSE),1,2)),\"\"),"
     + "x_match_include,\"(?i)\"&TRIM(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(x_include_raw,\" {{PIPE}} \",\"|\"),\" {{PIPE}}\",\"|\"),\"{{PIPE}} \",\"|\"),\"{{PIPE}}\",\"|\")),"
     + "x_match_exclude,\"(?i)\"&TRIM(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(x_exclude_raw,\" {{PIPE}} \",\"|\"),\" {{PIPE}}\",\"|\"),\"{{PIPE}} \",\"|\"),\"{{PIPE}}\",\"|\")),"
     + "d_check,IF(LEN(d_raw)<3,1,(N(" + dateLetter + ":" + dateLetter + ")>=d_start)*(N(" + dateLetter + ":" + dateLetter + ")<=d_end)),"
