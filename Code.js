@@ -1,8 +1,7 @@
 // Tiller Tools menu. Quick Search and Amazon are independent codebases.
-// Use createMenu (not createAddonMenu): createAddonMenu only shows entries when the script runs as an
-// installed Editor add-on—easy to end up with no menu during clasp/standalone dev. createMenu works for
-// bound spreadsheets and for installed add-ons; for published add-ons Google moves this under Extensions.
-// Standalone add-on: still install via Deploy → Test deployments → Google Workspace add-on, then reopen Sheets.
+// onOpen uses createAddonMenu() — standard for Marketplace / Editor add-ons (entries under Extensions).
+// For bound-script dev without add-on install, use createMenu() temporarily if the add-on menu is empty.
+// Standalone add-on: install via Deploy → Test deployments → Google Workspace add-on, then reopen Sheets.
 // For Quick Search only: remove the Amazon menu item and omit amazonorders.gs + Amazon HTML files.
 
 /** @param {GoogleAppsScript.Events.SheetsOnOpen | GoogleAppsScript.Events.SheetsOnInstall} [e] */
@@ -12,8 +11,9 @@ function onInstall(e) {
 
 /** @param {GoogleAppsScript.Events.SheetsOnOpen | GoogleAppsScript.Events.SheetsOnInstall} [e] */
 function onOpen(e) {
+  // createAddonMenu() is the standard for Marketplace submission
   SpreadsheetApp.getUi()
-    .createMenu("Tiller™ Tools")
+    .createAddonMenu() 
     .addItem("Tiller™ Amazon Import", "openAmazonOrdersSidebar")
     .addItem("Tiller™ Quick Search", "openQuickSearchSidebar")
     .addToUi();
