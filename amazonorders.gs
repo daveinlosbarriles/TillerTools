@@ -3,7 +3,7 @@
 // Runtime config is read from the "AMZ Import" sheet; defaults below are used only when creating that sheet.
 //
 // Global scope: all top-level const identifiers use an AMZ_ prefix to avoid collisions with
-// QuickSearchSidebar.js when both are in one project (same TillerTools repo). You can copy this
+// QuickSearchSidebar.gs when both are in one project (same TillerTools repo). You can copy this
 // file plus Amazon HTML + a minimal Code.gs into a standalone project if needed.
 
 const AMZ_IMPORT_SHEET_NAME = "AMZ Import";
@@ -269,7 +269,7 @@ function amzIsAmzPaymentTableBoundaryRow(fcNormalized) {
 /** Whole Foods / Amazon Fresh rows in Order History use Website = panda01 (case-insensitive). */
 const AMZ_WHOLE_FOODS_WEBSITE = "panda01";
 
-/** Amazon import helpers: distinct names from QuickSearchSidebar.js (same project global scope). */
+/** Amazon import helpers: distinct names from QuickSearchSidebar.gs (same project global scope). */
 const AMZ_ACCOUNTS_SHEET_NAME = "Accounts";
 /** Accounts sheet: Unique Account Identifier (match 4-digit token from payment string). */
 const AMZ_ACCOUNTS_COL_UNIQUE_ID = 6;

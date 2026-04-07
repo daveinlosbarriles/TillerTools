@@ -54,8 +54,8 @@ This is as simple as it sounds.
 
    | Paste from repo | Apps Script name | Notes |
    |-----------------|------------------|--------|
-   | [`Code.js`](Code.js) | `Code` (shows as **Code.gs**) | Menu **Tiller Tools** → Amazon Import + Quick Search; includes add-on homepage hook for future listing |
-   | [`QuickSearchSidebar.js`](QuickSearchSidebar.js) | `QuickSearchSidebar` | Saves as **QuickSearchSidebar.gs** |
+   | [`Code.gs`](Code.gs) | `Code` (**Code.gs** in editor) | Menu **Tiller Tools** → Amazon Import + Quick Search; includes add-on homepage hook for future listing |
+   | [`QuickSearchSidebar.gs`](QuickSearchSidebar.gs) | `QuickSearchSidebar` | Quick Search server logic |
    | [`QuickSearch.html`](QuickSearch.html) | `QuickSearch` | Sidebar UI |
    | [`amazonorders.gs`](amazonorders.gs) | `amazonorders` | All Amazon CSV pipelines |
    | [`AmazonOrdersSidebar.html`](AmazonOrdersSidebar.html) | `AmazonOrdersSidebar` | Import sidebar (matches `HtmlService.createHtmlOutputFromFile("AmazonOrdersSidebar")`) |
@@ -72,7 +72,7 @@ The manifest is **not** added with **+ → Script / HTML**. It controls **time z
 4. Replace the entire file with the contents of the repo’s [`appsscript.json`](appsscript.json) (copy/paste the whole JSON).
 5. **Save.**
 
-For **menu-only / personal** use you can delete the optional `"addOns": { ... }` block afterward to keep the manifest smaller; `Code.js` and the sidebars do not require it. Do **not** remove `oauthScopes`, `runtimeVersion`, or the `dependencies.enabledAdvancedServices` entry for **Sheets** if you use Quick Search.
+For **menu-only / personal** use you can delete the optional `"addOns": { ... }` block afterward to keep the manifest smaller; `Code.gs` and the sidebars do not require it. Do **not** remove `oauthScopes`, `runtimeVersion`, or the `dependencies.enabledAdvancedServices` entry for **Sheets** if you use Quick Search.
 
 ![Apps Script editor: project files, add Script/HTML, and Sheets under Services](docs/screenshots/apps-script-editor-sheets-service.png)
 
@@ -195,8 +195,8 @@ Quick Search applies a **basic filter** so only rows where **QuickSearch** is TR
 
 | File in repo | In Apps Script | Purpose |
 |--------------|----------------|---------|
-| `Code.js` | `Code.gs` | Menu, `onInstall` / `onOpen`, optional add-on homepage |
-| `QuickSearchSidebar.js` | `QuickSearchSidebar.gs` | Quick Search logic |
+| `Code.gs` | `Code.gs` | Menu, `onInstall` / `onOpen`, optional add-on homepage |
+| `QuickSearchSidebar.gs` | `QuickSearchSidebar.gs` | Quick Search logic |
 | `QuickSearch.html` | `QuickSearch.html` | Quick Search sidebar UI |
 | `amazonorders.gs` | `amazonorders.gs` | Amazon CSV pipelines, chunked bundle + finalize |
 | `AmazonOrdersSidebar.html` | `AmazonOrdersSidebar.html` | Amazon ZIP wizard UI |
@@ -204,7 +204,7 @@ Quick Search applies a **basic filter** so only rows where **QuickSearch** is TR
 | `assets/tiller-tools-logo.png` | — | Icon URL referenced for a future listing |
 | [docs/screenshots/](docs/screenshots/) | — | Images for this README (not pushed via clasp) |
 
-**Quick Search** and **Amazon import** do not call each other; they share only the menu in `Code.js`.
+**Quick Search** and **Amazon import** do not call each other; they share only the menu in `Code.gs`.
 
 ---
 
