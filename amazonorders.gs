@@ -1473,6 +1473,36 @@ function amzGetTillerColumnIndex_(tillerCols, headerLabel) {
 }
 
 /**
+ * If Transactions has no column matching {@code tillerLabels.METADATA}, inserts one column after the
+ * rightmost used column and sets row 1 to that label. Idempotent if the header already exists.
+ * @param {GoogleAppsScript.Sheet} sheet
+ * @param {Object} tillerLabels - from readAmzImportConfig
+ * @param {Array<string>} [timing] - optional log lines
+ * @returns {Object} refreshed map from {@link amzGetTillerColumnMap}
+ */
+function amzEnsureTransactionsMetadataColumn_(sheet, tillerLabels, timing) {
+  let tillerCols = amzGetTillerColumnMap(sheet);
+  const metaLabel =
+    tillerLabels && tillerLabels.METADATA != null ? String(tillerLabels.METADATA).trim() : "";
+  if (!metaLabel) return tillerCols;
+  if (amzGetTillerColumnIndex_(tillerCols, metaLabel) != null) return tillerCols;
+  const lastCol = Math.max(sheet.getLastColumn(), 1);
+  sheet.insertColumnAfter(lastCol);
+  const newCol = lastCol + 1;
+  sheet.getRange(1, newCol).setValue(metaLabel);
+  const lastRow = Math.max(sheet.getLastRow(), 1);
+  try {
+    amzEnsureSheetGridCovers(sheet, lastRow, newCol);
+  } catch (e) {
+    /* ignore */
+  }
+  if (timing && typeof timing.push === "function") {
+    timing.push('Server: added "' + metaLabel + '" column at column ' + newCol + ".");
+  }
+  return amzGetTillerColumnMap(sheet);
+}
+
+/**
  * Ensures every written Tiller label maps to a Transactions header (case-insensitive).
  * @returns {string|null} Error message or null.
  */
@@ -2445,7 +2475,11 @@ function openAmazonOrdersSidebar() {
   }
   if (config.tillerLabels && config.tillerLabels.SHEET_NAME) {
     const targetSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(config.tillerLabels.SHEET_NAME);
-    if (targetSheet) targetSheet.activate();
+    if (targetSheet) {
+      targetSheet.activate();
+      // Same as import paths: ensure Metadata column exists (not only when a CSV import runs).
+      amzEnsureTransactionsMetadataColumn_(targetSheet, config.tillerLabels, null);
+    }
   }
   const html = HtmlService.createHtmlOutputFromFile("AmazonOrdersSidebar").setTitle("Tiller™ Amazon Import");
   SpreadsheetApp.getUi().showSidebar(html);
@@ -2490,7 +2524,8 @@ function importAmazonRecent(csvText, months, options) {
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return "Error: Sheet '" + sheetName + "' not found.";
 
-  const tillerCols = amzGetTillerColumnMap(sheet);
+  let tillerCols = amzGetTillerColumnMap(sheet);
+  tillerCols = amzEnsureTransactionsMetadataColumn_(sheet, tillerLabels, timing);
   const colMapErr0 = amzValidateTransactionsImportColumns_(tillerCols, tillerLabels);
   if (colMapErr0) return colMapErr0;
   const categoryColNum = offsetCategory
@@ -2991,7 +3026,8 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return "Error: Sheet '" + sheetName + "' not found.";
 
-  const tillerCols = amzGetTillerColumnMap(sheet);
+  let tillerCols = amzGetTillerColumnMap(sheet);
+  tillerCols = amzEnsureTransactionsMetadataColumn_(sheet, tillerLabels, timing);
   const colMapErrDr = amzValidateTransactionsImportColumns_(tillerCols, tillerLabels);
   if (colMapErrDr) return colMapErrDr;
   const categoryColNum = offsetCategory
@@ -3281,7 +3317,8 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return "Error: Sheet '" + sheetName + "' not found.";
 
-  const tillerCols = amzGetTillerColumnMap(sheet);
+  let tillerCols = amzGetTillerColumnMap(sheet);
+  tillerCols = amzEnsureTransactionsMetadataColumn_(sheet, tillerLabels, timing);
   const colMapErrRd = amzValidateTransactionsImportColumns_(tillerCols, tillerLabels);
   if (colMapErrRd) return colMapErrRd;
   const categoryColNum = offsetCategory
