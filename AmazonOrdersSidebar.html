@@ -306,7 +306,7 @@
       <p>You may have more than one credit card in Amazon. For each type of credit card in Amazon, you need to specify which Tiller account it corresponds to. You can find the account details on the Accounts tab. If you want to manually plug in your own values, leave the various account columns blank on <strong>AMZ Import</strong>.</p>
     </div>
     <div id="payPanel"></div>
-    <p id="payAccountHint" class="hint" style="display:none; margin-top:10px;">Update any incorrect or <strong>Unknown</strong> account information on the <strong>AMZ Import</strong> tab before clicking Import.</p>
+    <p id="payAccountHint" class="hint" style="display:none; margin-top:10px;">Update any incorrect or Unknown account information on the AMZ Import tab before clicking Import.</p>
   </div>
 
   <!-- After payment table / files: single Import (same runAmazonImport for all paths). -->
@@ -1061,14 +1061,23 @@
         var rows = [];
         for (var i = 0; i < missing.length; i++) {
           var m = missing[i];
-          if (!m.suggested) continue;
-          rows.push({
-            paymentType: m.paymentType,
-            ACCOUNT: m.suggested.ACCOUNT,
-            ACCOUNT_NUMBER: m.suggested.ACCOUNT_NUMBER,
-            INSTITUTION: m.suggested.INSTITUTION,
-            ACCOUNT_ID: m.suggested.ACCOUNT_ID
-          });
+          if (m.suggested) {
+            rows.push({
+              paymentType: m.paymentType,
+              ACCOUNT: m.suggested.ACCOUNT,
+              ACCOUNT_NUMBER: m.suggested.ACCOUNT_NUMBER,
+              INSTITUTION: m.suggested.INSTITUTION,
+              ACCOUNT_ID: m.suggested.ACCOUNT_ID
+            });
+          } else {
+            rows.push({
+              paymentType: m.paymentType,
+              ACCOUNT: "Unknown",
+              ACCOUNT_NUMBER: "Unknown",
+              INSTITUTION: "Unknown",
+              ACCOUNT_ID: ""
+            });
+          }
         }
         return rows;
       }
@@ -1136,17 +1145,27 @@
               showImportButton(true);
 
               var toInsert = buildInsertPayloadFromMissing(data.missing || []);
-              if (!toInsert.length) return;
+              if (!toInsert.length) {
+                google.script.run
+                  .withFailureHandler(function () {})
+                  .amzDebugLogPayInsert(
+                    JSON.stringify({
+                      toInsertLen: 0,
+                      missingLen: (data.missing || []).length,
+                      paymentRowsLen: (data.paymentRows || []).length,
+                      skippedNoInsert: true
+                    })
+                  );
+                return;
+              }
 
               google.script.run
-                .withSuccessHandler(function (insertMsg) {
+                .withSuccessHandler(function () {
+                  google.script.run
+                    .withSuccessHandler(function (insertMsg) {
                   var insertNote = "";
-                  if (insertMsg) {
-                    if (String(insertMsg).indexOf("Error:") === 0) {
-                      insertNote = "<p class=\"pay-miss\">" + escapeHtml(insertMsg) + "</p>";
-                    } else {
-                      insertNote = "<p class=\"hint\">" + escapeHtml(insertMsg) + "</p>";
-                    }
+                  if (insertMsg && String(insertMsg).indexOf("Error:") === 0) {
+                    insertNote = "<p class=\"pay-miss\">" + escapeHtml(insertMsg) + "</p>";
                   }
                   // One CSV parse only: update rows locally after insert (no second analyzePaymentMethodsForOrderHistory).
                   if (
@@ -1157,23 +1176,29 @@
                     mergePaymentRowsAfterInsert(data, toInsert);
                     state.payAnalysis = data;
                   }
-                  $("payPanel").innerHTML =
-                    renderPaymentTable(data) +
-                    insertNote +
-                    "<p class=\"hint\">Review the <strong>AMZ Import</strong> tab if you need to edit any payment row.</p>";
+                  $("payPanel").innerHTML = renderPaymentTable(data) + insertNote;
                   updatePayAccountHintVisibility(data);
                   scrollImportActionIntoView();
+                    })
+                    .withFailureHandler(function (err) {
+                      $("payPanel").innerHTML =
+                        renderPaymentTable(data) +
+                        "<p class=\"pay-miss\">Could not add suggested rows: " +
+                        escapeHtml(err.message || String(err)) +
+                        "</p>";
+                      updatePayAccountHintVisibility(data);
+                      scrollImportActionIntoView();
+                    })
+                    .insertSuggestedAmzPaymentRows(JSON.stringify(toInsert));
                 })
-                .withFailureHandler(function (err) {
-                  $("payPanel").innerHTML =
-                    renderPaymentTable(data) +
-                    "<p class=\"pay-miss\">Could not add suggested rows: " +
-                    escapeHtml(err.message || String(err)) +
-                    "</p>";
-                  updatePayAccountHintVisibility(data);
-                  scrollImportActionIntoView();
-                })
-                .insertSuggestedAmzPaymentRows(JSON.stringify(toInsert));
+                .withFailureHandler(function () {})
+                .amzDebugLogPayInsert(
+                  JSON.stringify({
+                    toInsertLen: toInsert.length,
+                    missingLen: (data.missing || []).length,
+                    paymentRowsLen: (data.paymentRows || []).length
+                  })
+                );
             } catch (ex) {
               $("payPanel").innerHTML = "<p class=\"pay-miss\">Invalid response from server.</p>";
               updatePayAccountHintVisibility(null);

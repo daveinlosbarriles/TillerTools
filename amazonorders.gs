@@ -1111,6 +1111,8 @@ function analyzePaymentMethodsForOrderHistory(csvText, cutoffDateIso, includePhy
   const accounts = amzReadAccountsForLookup();
   const missing = [];
   const paymentTypesList = Object.keys(paymentTypes).sort();
+  let missingSuggestedCount = 0;
+  let missingUnknownCount = 0;
   const paymentRows = [];
   paymentTypesList.forEach(function (pt) {
     const existingRow = amzLookupPaymentAccountRow(existing, pt);
@@ -1139,6 +1141,8 @@ function analyzePaymentMethodsForOrderHistory(csvText, cutoffDateIso, includePhy
           }
         : null
     });
+    if (acc) missingSuggestedCount++;
+    else missingUnknownCount++;
     if (acc) {
       paymentRows.push({
         paymentType: pt,
@@ -1160,12 +1164,65 @@ function analyzePaymentMethodsForOrderHistory(csvText, cutoffDateIso, includePhy
     }
   });
 
+  // #region agent log
+  try {
+    Logger.log(
+      JSON.stringify({
+        sessionId: "fcc3e5",
+        hypothesisId: "H4",
+        location: "analyzePaymentMethodsForOrderHistory:summary",
+        message: "payment scan summary",
+        data: {
+          paymentTypesFound: paymentTypesList.length,
+          missingLen: missing.length,
+          missingSuggestedCount: missingSuggestedCount,
+          missingUnknownCount: missingUnknownCount
+        },
+        timestamp: Date.now()
+      })
+    );
+  } catch (amzLogErr) {}
+  // #endregion
+
   return JSON.stringify({
     ok: true,
     paymentTypesFound: paymentTypesList,
     missing: missing,
     paymentRows: paymentRows
   });
+}
+
+/**
+ * Debug-only: log sidebar insert payload shape (session fcc3e5). Not for production secrets.
+ * @param {string} payloadJson - JSON e.g. { toInsertLen, missingLen }
+ */
+function amzDebugLogPayInsert(payloadJson) {
+  // #region agent log
+  try {
+    const o = JSON.parse(payloadJson);
+    Logger.log(
+      JSON.stringify({
+        sessionId: "fcc3e5",
+        hypothesisId: "H5",
+        location: "AmazonOrdersSidebar:preInsert",
+        message: "client insert payload summary",
+        data: o,
+        timestamp: Date.now()
+      })
+    );
+  } catch (e) {
+    Logger.log(
+      JSON.stringify({
+        sessionId: "fcc3e5",
+        hypothesisId: "H5",
+        location: "amzDebugLogPayInsert:error",
+        message: String(e && e.message ? e.message : e),
+        data: {},
+        timestamp: Date.now()
+      })
+    );
+  }
+  // #endregion
 }
 
 /**
@@ -1181,6 +1238,20 @@ function insertSuggestedAmzPaymentRows(rowsJson) {
   }
   if (!rows || !rows.length) return "Nothing to insert.";
   try {
+    // #region agent log
+    try {
+      Logger.log(
+        JSON.stringify({
+          sessionId: "fcc3e5",
+          hypothesisId: "H1",
+          location: "insertSuggestedAmzPaymentRows:afterParse",
+          message: "rows before sheet dedupe",
+          data: { nParsed: rows.length },
+          timestamp: Date.now()
+        })
+      );
+    } catch (amzLogErr) {}
+    // #endregion
     const amzResult = getOrCreateAmzImportSheet();
     const configForDedupe = readAmzImportConfig(amzResult.sheet);
     const have = configForDedupe.paymentAccounts || {};
@@ -1188,6 +1259,20 @@ function insertSuggestedAmzPaymentRows(rowsJson) {
       const pt = r.paymentType != null ? amzNormalizePaymentTypeKey(r.paymentType) : "";
       return pt && !amzPaymentTypeHasRow(have, pt);
     });
+    // #region agent log
+    try {
+      Logger.log(
+        JSON.stringify({
+          sessionId: "fcc3e5",
+          hypothesisId: "H1",
+          location: "insertSuggestedAmzPaymentRows:afterDedupe",
+          message: "rows after sheet dedupe",
+          data: { nAfterDedupe: rows.length },
+          timestamp: Date.now()
+        })
+      );
+    } catch (amzLogErr2) {}
+    // #endregion
     if (!rows.length) return "All suggested payment types already exist on AMZ Import.";
     const sheet = amzResult.sheet;
     const data = sheet.getDataRange().getValues();
@@ -1209,6 +1294,25 @@ function insertSuggestedAmzPaymentRows(rowsJson) {
     const insertAfterRow = lastData + 1;
     const numRows = rows.length;
     const numCols = 6;
+    // #region agent log
+    try {
+      Logger.log(
+        JSON.stringify({
+          sessionId: "fcc3e5",
+          hypothesisId: "H3",
+          location: "insertSuggestedAmzPaymentRows:tableBounds",
+          message: "payment table insert target",
+          data: {
+            tableStart0: tableStart,
+            lastData0: lastData,
+            insertAfterRow1Based: insertAfterRow,
+            firstNewRow1Based: insertAfterRow + 1
+          },
+          timestamp: Date.now()
+        })
+      );
+    } catch (amzLogErr3) {}
+    // #endregion
     const out = [];
     for (let r = 0; r < numRows; r++) {
       const row = rows[r];
@@ -1222,8 +1326,53 @@ function insertSuggestedAmzPaymentRows(rowsJson) {
       ]);
     }
     sheet.insertRowsAfter(insertAfterRow, numRows);
-    // getRange(row, column, numRows, numColumns) — third arg is row COUNT, not end row.
-    sheet.getRange(insertAfterRow + 1, 1, numRows, numCols).setValues(out);
+    // Use Range.offset(0,0,h,w) so row/column *dimensions* are unambiguous. Sheet.getRange(r,c,nRows,nCols)
+    // matches the docs, but the same 4-int pattern is easy to confuse with R1C1 end indices (see sort uses
+    // getRange(2,1,lastRow,lastCol)); offset avoids a too-small "end row" clobbering the wrong rows.
+    const writeRange = sheet.getRange(insertAfterRow + 1, 1).offset(0, 0, numRows, numCols);
+    // #region agent log
+    try {
+      Logger.log(
+        JSON.stringify({
+          sessionId: "fcc3e5",
+          hypothesisId: "H2",
+          location: "insertSuggestedAmzPaymentRows:beforeSetValues",
+          message: "write range geometry",
+          data: {
+            a1: writeRange.getA1Notation(),
+            rangeNumRows: writeRange.getNumRows(),
+            rangeNumCols: writeRange.getNumColumns(),
+            outRowCount: out.length
+          },
+          timestamp: Date.now()
+        })
+      );
+    } catch (amzLogErr4) {}
+    // #endregion
+    writeRange.setValues(out);
+    // #region agent log
+    try {
+      const rb = writeRange.getValues();
+      const a0 = rb[0] && rb[0][0] != null ? String(rb[0][0]) : "";
+      const a1 = rb[1] && rb[1][0] != null ? String(rb[1][0]) : "";
+      Logger.log(
+        JSON.stringify({
+          sessionId: "fcc3e5",
+          hypothesisId: "H2",
+          location: "insertSuggestedAmzPaymentRows:afterSetValues",
+          message: "readback row count and col A distinctness",
+          data: {
+            readBackOuterLen: rb.length,
+            readBackFirstRowLen: rb[0] ? rb[0].length : 0,
+            colA0Len: a0.length,
+            colA1Len: a1.length,
+            colA0EqualsColA1: a0 !== "" && a0 === a1
+          },
+          timestamp: Date.now()
+        })
+      );
+    } catch (amzLogErr5) {}
+    // #endregion
     SpreadsheetApp.flush();
     return "Inserted " + numRows + " payment row(s) on the AMZ Import tab.";
   } catch (e) {
