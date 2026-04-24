@@ -457,6 +457,23 @@
 
   function $(id) { return document.getElementById(id); }
 
+  // #region agent log
+  function qsPostAgentDebug(data) {
+    if (!data) return;
+    var payload = Object.assign({ timestamp: Date.now(), sessionId: "8efe09" }, data);
+    fetch("http://127.0.0.1:7802/ingest/d3addaca-f957-4f06-8508-2ea016ff0583", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "8efe09" },
+      body: JSON.stringify(payload)
+    }).catch(function() {});
+  }
+  function qsEmitDebugFromResult(result) {
+    if (!result) return;
+    if (result.agentDebug) qsPostAgentDebug(Object.assign({ location: "QuickSearch.html:writeCriteria" }, result.agentDebug));
+    if (result.setupAgentDebug) qsPostAgentDebug(Object.assign({ location: "QuickSearch.html:afterSetup" }, result.setupAgentDebug));
+  }
+  // #endregion
+
   function hasDate() {
     return (state.dateFrom && state.dateFrom.trim()) || (state.dateTo && state.dateTo.trim());
   }
@@ -774,6 +791,7 @@
         // var serverMs = (result && result.serverMs != null) ? result.serverMs : "?";
         // var timing = " (server: " + serverMs + " ms, round-trip: " + (totalMs / 1000).toFixed(1) + " s)";
         // var detail = (result && result.timingBreakdown) ? formatTimingBreakdown(result.timingBreakdown, totalMs, typeof serverMs === "number" ? serverMs : null) : "";
+        if (result) qsEmitDebugFromResult(result);
         if (result && result.ok) {
           var el = $("setupStatus");
           if (el) el.style.display = "none";
@@ -785,10 +803,8 @@
           google.script.run
             .withSuccessHandler(function(r2) {
               if (setupEl) setupEl.style.display = "none";
-              var setupTotal = Date.now() - setupStart;
+              if (r2) qsEmitDebugFromResult(r2);
               if (r2 && r2.ok) {
-                // var setupTotalMs = Date.now() - setupStart;
-                // var setupDetail = (r2.timingBreakdown) ? formatTimingBreakdown(r2.timingBreakdown, setupTotalMs, r2.serverMs) : "";
                 setStatus("Setup complete. Criteria updated.", false); // + round-trip + setupDetail
               } else {
                 setStatus((r2 && r2.message) || "Error.", true);
@@ -796,6 +812,12 @@
             })
             .withFailureHandler(function(e) {
               if (setupEl) setupEl.style.display = "none";
+              qsPostAgentDebug({
+                sessionId: "8efe09",
+                hypothesisId: "H10",
+                location: "QuickSearch.html:applyQuickSearch_rpc_failure",
+                message: e && e.message ? e.message : String(e)
+              });
               setStatus("Error: " + (e && e.message || "unknown"), true);
             })
             .applyQuickSearch(criteriaStr);
@@ -808,6 +830,12 @@
       .withFailureHandler(function(err) {
         var el3 = $("setupStatus");
         if (el3) el3.style.display = "none";
+        qsPostAgentDebug({
+          sessionId: "8efe09",
+          hypothesisId: "H10",
+          location: "QuickSearch.html:writeCriteria_rpc_failure",
+          message: err && (err.message || err.toString()) || "unknown"
+        });
         setStatus("Error: " + (err && (err.message || err.toString()) || "unknown"), true);
       })
       .writeQuickSearchCriteria(criteriaStr, true);

@@ -40,10 +40,17 @@ var HELPER_COL_CRITERIA_DEFAULT = 2;
 var RANGE_INDEX_FIRST = 0;
 var RANGE_INDEX_SECOND = 1;
 
+// --- Scan row 1 for helper headers: must cover columns to the RIGHT of Match/Criteria (e.g. "Priority") ---
+var QUICK_SEARCH_HEADER_SCAN_MAX_COLS = 120;
+
 // --- Quick Search helper column headers ---
 var QUICK_SEARCH_MATCH_HEADER = "QuickSearch";
 var QUICK_SEARCH_CRITERIA_HEADER = "QuickCriteria";
 // Criteria: single string in row 1 only. Format: D:dateFrom,dateTo|X:description|C:cat1,cat2|A:min,max|Q:acc1,acc2
+
+// Literal fragments inside buildQuickSearchFormula — used to tell our match ARRAYFORMULA from any other ARRAYFORMULA on the sheet.
+var QUICK_SEARCH_AF_ROW1_SNIPPET = ')=1,"' + QUICK_SEARCH_MATCH_HEADER + '",LET(';
+var QUICK_SEARCH_AF_D_BLOCK_SNIPPET = 'REGEXEXTRACT(input,"D:([^|]*)"';
 
 /**
  * Row 1 header name -> 1-based column index (matches Tiller header labels).
@@ -183,10 +190,155 @@ function quickSearchEscapeRegex(s) {
 }
 
 /**
+ * Reads legacy last-two-column row-1 labels (used for debug + edge cases).
+ * @returns {{ legacyStart: number, h0: string, h1: string }}
+ */
+function quickSearchLegacyLastTwoHeaders_(sheet, lastCol) {
+  var legacyStart = Math.max(COL_FIRST, lastCol - 1);
+  var row1 = sheet.getRange(ROW_HEADER, legacyStart, ROW_HEADER, lastCol).getDisplayValues()[0];
+  var h0 = (row1[RANGE_INDEX_FIRST] && String(row1[RANGE_INDEX_FIRST]).trim()) || "";
+  var h1 = (row1[RANGE_INDEX_SECOND] != null ? String(row1[RANGE_INDEX_SECOND]).trim() : "") || "";
+  return { legacyStart: legacyStart, h0: h0, h1: h1 };
+}
+
+/**
+ * Finds Quick Search helper columns by scanning row 1 from the right (Match shows "QuickSearch" from ARRAYFORMULA).
+ * Wider than the last two columns so a column after Criteria (e.g. "Priority") does not hide the helpers from detection.
+ * @returns {{ matchColIndex: number|null, criteriaColIndex: number|null, needCriteriaInsert: boolean, debug: object }}
+ */
+function quickSearchResolveHelperColumnsFromSheet_(sheet) {
+  var lastCol = sheet.getLastColumn();
+  var leg = quickSearchLegacyLastTwoHeaders_(sheet, lastCol);
+  var debug = {
+    hypothesisId: "H1",
+    lastCol: lastCol,
+    legacyH0: leg.h0,
+    legacyH1: leg.h1,
+    scanWidth: 0,
+    scanStart: 0,
+    path: "none"
+  };
+  if (lastCol < COL_FIRST) {
+    debug.path = "empty_sheet";
+    return { matchColIndex: null, criteriaColIndex: null, needCriteriaInsert: false, debug: debug };
+  }
+
+  var scanWidth = Math.min(QUICK_SEARCH_HEADER_SCAN_MAX_COLS, lastCol);
+  var scanStart = Math.max(COL_FIRST, lastCol - scanWidth + 1);
+  debug.scanWidth = scanWidth;
+  debug.scanStart = scanStart;
+  var row1 = sheet.getRange(ROW_HEADER, scanStart, ROW_HEADER, lastCol).getDisplayValues()[0];
+
+  var i;
+  for (i = row1.length - 1; i >= 0; i--) {
+    var cell = (row1[i] && String(row1[i]).trim()) || "";
+    if (cell === QUICK_SEARCH_MATCH_HEADER) {
+      var matchColIndex = scanStart + i;
+      if (matchColIndex === lastCol) {
+        debug.path = "wide_scan_match_last_needs_criteria_col";
+        return { matchColIndex: matchColIndex, criteriaColIndex: null, needCriteriaInsert: true, debug: debug };
+      }
+      debug.path = "wide_scan_match";
+      debug.resolvedMatchCol = matchColIndex;
+      debug.resolvedCriteriaCol = matchColIndex + 1;
+      return { matchColIndex: matchColIndex, criteriaColIndex: matchColIndex + 1, needCriteriaInsert: false, debug: debug };
+    }
+  }
+  for (i = row1.length - 1; i >= 0; i--) {
+    var c2 = (row1[i] && String(row1[i]).trim()) || "";
+    if (c2 === QUICK_SEARCH_CRITERIA_HEADER) {
+      var critCol = scanStart + i;
+      if (critCol > COL_FIRST) {
+        debug.path = "wide_scan_criteria_literal";
+        debug.resolvedMatchCol = critCol - 1;
+        debug.resolvedCriteriaCol = critCol;
+        return { matchColIndex: critCol - 1, criteriaColIndex: critCol, needCriteriaInsert: false, debug: debug };
+      }
+    }
+  }
+
+  if (leg.h0 === QUICK_SEARCH_MATCH_HEADER) {
+    debug.path = "legacy_last2_h0_match";
+    return { matchColIndex: leg.legacyStart, criteriaColIndex: leg.legacyStart + 1, needCriteriaInsert: false, debug: debug };
+  }
+  if (leg.h1 === QUICK_SEARCH_MATCH_HEADER) {
+    debug.path = "legacy_last2_h1_match";
+    return { matchColIndex: lastCol, criteriaColIndex: null, needCriteriaInsert: true, debug: debug };
+  }
+  if (leg.h0 === QUICK_SEARCH_CRITERIA_HEADER && leg.legacyStart > COL_FIRST) {
+    debug.path = "legacy_last2_h0_criteria_header";
+    return { matchColIndex: leg.legacyStart - 1, criteriaColIndex: leg.legacyStart, needCriteriaInsert: false, debug: debug };
+  }
+  if (leg.h1 === QUICK_SEARCH_CRITERIA_HEADER) {
+    debug.path = "legacy_last2_h1_criteria_header";
+    return { matchColIndex: lastCol - 1, criteriaColIndex: lastCol, needCriteriaInsert: false, debug: debug };
+  }
+
+  debug.path = "append_new_pair";
+  debug.matchHeaderHitsInScan = quickSearchCountMatchHeadersInRow1_(row1, scanStart);
+  return { matchColIndex: null, criteriaColIndex: null, needCriteriaInsert: false, debug: debug };
+}
+
+/**
+ * Counts row-1 cells in the scanned range whose display value equals QuickSearch (diagnostics only).
+ */
+function quickSearchCountMatchHeadersInRow1_(row1, scanStart) {
+  var hits = [];
+  var k;
+  for (k = 0; k < row1.length; k++) {
+    var cell = (row1[k] && String(row1[k]).trim()) || "";
+    if (cell === QUICK_SEARCH_MATCH_HEADER) {
+      hits.push(scanStart + k);
+    }
+  }
+  return { count: hits.length, cols: hits };
+}
+
+/**
+ * Last N columns of row 1: 1-based index, column letter, truncated display (for logs).
+ */
+function quickSearchRow1TailSamples_(sheet, lastCol, tailN) {
+  if (!sheet || lastCol < 1) return [];
+  var n = Math.min(tailN, lastCol);
+  var c0 = Math.max(COL_FIRST, lastCol - n + 1);
+  var row = sheet.getRange(ROW_HEADER, c0, ROW_HEADER, lastCol).getDisplayValues()[0];
+  var out = [];
+  var j;
+  for (j = 0; j < row.length; j++) {
+    var colIdx = c0 + j;
+    var cv = row[j] != null ? String(row[j]).trim() : "";
+    out.push({ col: colIdx, letter: quickSearchColIndexToLetter(colIdx), disp: cv.substring(0, 56) });
+  }
+  return out;
+}
+
+/**
+ * Match column is immediately left of criteria (row 1). It must contain **this** add-on's ARRAYFORMULA
+ * (same strings as buildQuickSearchFormula), not some other ARRAYFORMULA elsewhere on the sheet.
+ */
+function quickSearchMatchColumnHasOurArrayFormula_(sheet, criteriaColIndex) {
+  if (!sheet || criteriaColIndex == null || criteriaColIndex < 2) return false;
+  var mCol = criteriaColIndex - 1;
+  try {
+    var f = sheet.getRange(ROW_HEADER, mCol).getFormula();
+    var s = f == null ? "" : String(f).trim();
+    if (!s) return false;
+    var u = s.toUpperCase();
+    if (u.indexOf("ARRAYFORMULA") === -1) return false;
+    if (s.indexOf(QUICK_SEARCH_AF_ROW1_SNIPPET) === -1) return false;
+    if (s.indexOf(QUICK_SEARCH_AF_D_BLOCK_SNIPPET) === -1) return false;
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
  * Ensures the Transactions sheet has two helper columns at the end (visible).
  * Match column: row 1 shows "QuickSearch" (formula output for header row).
  * Criteria column: always the column immediately after Match; row 1 holds the criteria string (so header is overwritten).
- * We find Match by "QuickSearch"; Criteria = Match + 1. Never add columns if we already find Match.
+ * We find Match by scanning row 1 from the right for "QuickSearch" (not only the last two columns), so extra columns
+ * after Criteria do not prevent detection. Criteria = Match + 1. Never add columns if we already find Match.
  */
 function ensureQuickSearchHelperColumns() {
   var ss = SpreadsheetApp.getActive();
@@ -198,45 +350,95 @@ function ensureQuickSearchHelperColumns() {
     sheet.getRange(ROW_HEADER, HELPER_COL_MATCH_DEFAULT, ROW_HEADER, HELPER_COL_CRITERIA_DEFAULT).setValues([["", ""]]);
     sheet.getRange(ROW_HEADER, HELPER_COL_MATCH_DEFAULT).setValue(QUICK_SEARCH_MATCH_HEADER);
     sheet.getRange(ROW_HEADER, HELPER_COL_CRITERIA_DEFAULT).setValue(QUICK_SEARCH_CRITERIA_HEADER);
-    return { matchColIndex: HELPER_COL_MATCH_DEFAULT, criteriaColIndex: HELPER_COL_CRITERIA_DEFAULT };
+    return {
+      matchColIndex: HELPER_COL_MATCH_DEFAULT,
+      criteriaColIndex: HELPER_COL_CRITERIA_DEFAULT,
+      _agentDebug: { hypothesisId: "H1", path: "init_empty_grid", lastCol: lastCol }
+    };
   }
-  var startCol = Math.max(COL_FIRST, lastCol - 1);
-  var row1 = sheet.getRange(ROW_HEADER, startCol, ROW_HEADER, lastCol).getDisplayValues()[0];
-  var h0 = (row1[RANGE_INDEX_FIRST] && String(row1[RANGE_INDEX_FIRST]).trim()) || "";
-  var h1 = (row1[RANGE_INDEX_SECOND] != null ? String(row1[RANGE_INDEX_SECOND]).trim() : "") || "";
-  if (h0 === QUICK_SEARCH_MATCH_HEADER) {
-    return { matchColIndex: startCol, criteriaColIndex: startCol + 1 };
+
+  var resolved = quickSearchResolveHelperColumnsFromSheet_(sheet);
+  var dbg = resolved.debug || {};
+  dbg.row1Tail = quickSearchRow1TailSamples_(sheet, lastCol, 10);
+  dbg.phase = "after_resolve";
+
+  if (resolved.matchColIndex != null) {
+    var badMatch = resolved.matchColIndex < COL_FIRST;
+    var badCrit = !resolved.needCriteriaInsert && (resolved.criteriaColIndex == null || resolved.criteriaColIndex < COL_FIRST);
+    if (badMatch || badCrit) {
+      dbg.phase = "invalid_resolved_indices_fallback_append";
+      dbg.badMatch = badMatch ? resolved.matchColIndex : null;
+      dbg.badCrit = badCrit ? resolved.criteriaColIndex : null;
+      resolved = { matchColIndex: null, criteriaColIndex: null, needCriteriaInsert: false, debug: dbg };
+    }
   }
-  if (h1 === QUICK_SEARCH_MATCH_HEADER) {
-    sheet.insertColumnAfter(lastCol);
-    sheet.getRange(ROW_HEADER, lastCol + 1).setValue(QUICK_SEARCH_CRITERIA_HEADER);
-    return { matchColIndex: lastCol, criteriaColIndex: lastCol + 1 };
-  }
-  if (h0 === QUICK_SEARCH_CRITERIA_HEADER) {
-    return { matchColIndex: startCol - 1, criteriaColIndex: startCol };
-  }
-  if (h1 === QUICK_SEARCH_CRITERIA_HEADER) {
-    return { matchColIndex: lastCol - 1, criteriaColIndex: lastCol };
+
+  if (resolved.matchColIndex != null) {
+    if (resolved.needCriteriaInsert) {
+      try {
+        sheet.insertColumnAfter(lastCol);
+        sheet.getRange(ROW_HEADER, lastCol + 1).setValue(QUICK_SEARCH_CRITERIA_HEADER);
+      } catch (eIns) {
+        dbg.insertCriteriaError = String(eIns && eIns.message ? eIns.message : eIns);
+        dbg.phase = "insert_criteria_failed";
+        return { matchColIndex: null, criteriaColIndex: null, _agentDebug: dbg };
+      }
+      dbg.path = (dbg.path || "") + "_inserted_criteria";
+      dbg.phase = "inserted_criteria_only";
+      dbg.lastColAfter = sheet.getLastColumn();
+      return {
+        matchColIndex: lastCol,
+        criteriaColIndex: lastCol + 1,
+        _agentDebug: dbg
+      };
+    }
+    if (!quickSearchMatchColumnHasOurArrayFormula_(sheet, resolved.criteriaColIndex)) {
+      dbg.phase = "reused_row1_quicksearch_but_match_has_not_our_arrayformula_append";
+      dbg.staleReuseMatchCol = resolved.matchColIndex;
+      dbg.staleReuseCriteriaCol = resolved.criteriaColIndex;
+      resolved = { matchColIndex: null, criteriaColIndex: null, needCriteriaInsert: false, debug: dbg };
+    } else {
+      dbg.phase = "reused_existing_helpers";
+      return {
+        matchColIndex: resolved.matchColIndex,
+        criteriaColIndex: resolved.criteriaColIndex,
+        _agentDebug: dbg
+      };
+    }
   }
 
   // No existing helper columns: append two columns
-  var matchColIndex, criteriaColIndex;
+  var matchColIndex;
+  var criteriaColIndex;
   if (lastCol === 0) {
     sheet.getRange(ROW_HEADER, HELPER_COL_MATCH_DEFAULT, ROW_HEADER, HELPER_COL_CRITERIA_DEFAULT).setValues([["", ""]]);
     sheet.getRange(ROW_HEADER, HELPER_COL_MATCH_DEFAULT).setValue(QUICK_SEARCH_MATCH_HEADER);
     sheet.getRange(ROW_HEADER, HELPER_COL_CRITERIA_DEFAULT).setValue(QUICK_SEARCH_CRITERIA_HEADER);
     matchColIndex = HELPER_COL_MATCH_DEFAULT;
     criteriaColIndex = HELPER_COL_CRITERIA_DEFAULT;
+    dbg.phase = "init_pair_at_default_AB";
   } else {
-    sheet.insertColumnAfter(lastCol);
-    sheet.insertColumnAfter(lastCol + 1);
+    var lastColBeforeInsert = lastCol;
+    dbg.lastColBeforeInsert = lastColBeforeInsert;
+    try {
+      sheet.insertColumnAfter(lastCol);
+      sheet.insertColumnAfter(lastCol + 1);
+    } catch (eApp) {
+      dbg.appendInsertError = String(eApp && eApp.message ? eApp.message : eApp);
+      dbg.phase = "append_two_columns_failed";
+      return { matchColIndex: null, criteriaColIndex: null, _agentDebug: dbg };
+    }
     matchColIndex = lastCol + 1;
     criteriaColIndex = lastCol + 2;
     sheet.getRange(ROW_HEADER, matchColIndex).setValue(QUICK_SEARCH_MATCH_HEADER);
     sheet.getRange(ROW_HEADER, criteriaColIndex).setValue(QUICK_SEARCH_CRITERIA_HEADER);
+    dbg.phase = "appended_two_columns";
+    dbg.lastColAfterInsert = sheet.getLastColumn();
   }
 
-  return { matchColIndex: matchColIndex, criteriaColIndex: criteriaColIndex };
+  dbg.appendedMatchCol = matchColIndex;
+  dbg.appendedCriteriaCol = criteriaColIndex;
+  return { matchColIndex: matchColIndex, criteriaColIndex: criteriaColIndex, _agentDebug: dbg };
 }
 
 /**
@@ -295,7 +497,20 @@ function ensureQuickSearchSetup() {
   if (!sheet) return { ok: false, message: "Transactions sheet not found." };
 
   var cols = ensureQuickSearchHelperColumns();
-  if (!cols) return { ok: false, message: "Could not ensure helper columns." };
+  if (!cols) {
+    return { ok: false, message: "Could not ensure helper columns.", agentDebug: { sessionId: "8efe09", hypothesisId: "H6", location: "ensureQuickSearchSetup", phase: "ensure_helpers_returned_null" } };
+  }
+  if (cols.matchColIndex == null || cols.criteriaColIndex == null) {
+    return {
+      ok: false,
+      message: "Could not ensure helper columns (invalid indices after insert).",
+      agentDebug: Object.assign({ sessionId: "8efe09", hypothesisId: "H6", location: "ensureQuickSearchSetup", phase: "ensure_helpers_invalid_indices" }, cols._agentDebug || {})
+    };
+  }
+
+  var setupAgentDebug = cols._agentDebug || null;
+  var matchColUse = cols.matchColIndex;
+  var criteriaColUse = cols.criteriaColIndex;
 
   var tillerCols = getTillerColumnMap(sheet);
   var dateCol = tillerCols[TRANSACTIONS_HEADER_DATE];
@@ -313,21 +528,75 @@ function ensureQuickSearchSetup() {
     }
   }
   if (!dateCol || !descCol || !amountCol || !accountCol || !catCol) {
-    return { ok: false, message: "Required columns (" + TRANSACTIONS_HEADER_DATE + ", " + TRANSACTIONS_HEADER_DESCRIPTION + ", " + TRANSACTIONS_HEADER_AMOUNT + ", " + TRANSACTIONS_HEADER_ACCOUNT + ", " + TRANSACTIONS_HEADER_CATEGORY + ") not found." };
+    return {
+      ok: false,
+      message: "Required columns (" + TRANSACTIONS_HEADER_DATE + ", " + TRANSACTIONS_HEADER_DESCRIPTION + ", " + TRANSACTIONS_HEADER_AMOUNT + ", " + TRANSACTIONS_HEADER_ACCOUNT + ", " + TRANSACTIONS_HEADER_CATEGORY + ") not found.",
+      agentDebug: Object.assign(
+        {
+          sessionId: "8efe09",
+          hypothesisId: "H5",
+          location: "ensureQuickSearchSetup",
+          phase: "missing_tiller_headers",
+          hasDate: !!dateCol,
+          hasDesc: !!descCol,
+          hasAmount: !!amountCol,
+          hasAccount: !!accountCol,
+          hasCategory: !!catCol,
+          sheetLastCol: sheet.getLastColumn()
+        },
+        setupAgentDebug || {}
+      )
+    };
   }
 
-  var criteriaColLetter = quickSearchColIndexToLetter(cols.criteriaColIndex);
-  var matchCell = sheet.getRange(ROW_HEADER, cols.matchColIndex);
+  var criteriaColLetter = quickSearchColIndexToLetter(criteriaColUse);
+  var matchCell = sheet.getRange(ROW_HEADER, matchColUse);
   var formula = buildQuickSearchFormula(tillerCols, criteriaColLetter, dateCol, descCol, amountCol, accountCol, catCol);
-  matchCell.setFormula(formula);
+  try {
+    matchCell.setFormula(formula);
+  } catch (eForm) {
+    return {
+      ok: false,
+      message: "Could not set Quick Search formula: " + String(eForm && eForm.message ? eForm.message : eForm),
+      agentDebug: Object.assign(
+        {
+          sessionId: "8efe09",
+          hypothesisId: "H7",
+          location: "ensureQuickSearchSetup",
+          phase: "setFormula_threw",
+          matchColUse: matchColUse,
+          criteriaColUse: criteriaColUse,
+          criteriaColLetter: criteriaColLetter,
+          formulaLen: formula ? String(formula).length : 0,
+          setFormulaError: String(eForm && eForm.message ? eForm.message : eForm)
+        },
+        setupAgentDebug || {}
+      )
+    };
+  }
 
   var lastRow = Math.max(sheet.getLastRow(), ROW_DATA_FIRST);
-  applyQuickSearchBasicFilter(sheet, cols.criteriaColIndex, lastRow);
+  applyQuickSearchBasicFilter(sheet, criteriaColUse, lastRow);
   // Cache criteria column index so write/clear don't use getLastColumn() (which can point to Match when criteria is empty).
   try {
-    PropertiesService.getDocumentProperties().setProperty("quickSearchCriteriaCol", String(cols.criteriaColIndex));
+    PropertiesService.getDocumentProperties().setProperty("quickSearchCriteriaCol", String(criteriaColUse));
   } catch (e) { /* ignore */ }
-  return { ok: true };
+  var out = { ok: true };
+  if (setupAgentDebug) {
+    out.agentDebug = Object.assign(
+      {
+        sessionId: "8efe09",
+        location: "ensureQuickSearchSetup",
+        phase: "setup_ok",
+        cachedCriteriaAfter: criteriaColUse,
+        matchColAfter: matchColUse,
+        criteriaColLetter: criteriaColLetter,
+        formulaLen: formula ? String(formula).length : 0
+      },
+      setupAgentDebug
+    );
+  }
+  return out;
 }
 
 /**
@@ -409,29 +678,16 @@ function buildQuickSearchCriteriaString(criteria) {
 /**
  * Returns { matchColIndex, criteriaColIndex } for existing Quick Search columns, or null.
  * Match column: row 1 displays "QuickSearch". Criteria column: next column.
- * Only reads the last 2 columns (where helpers live) to avoid slow full-row read on wide sheets.
+ * Scans a trailing window of row 1 (same as ensureQuickSearchHelperColumns) so columns after Criteria do not hide helpers.
  */
 function getQuickSearchColumnIndices(sheet) {
   if (!sheet) return null;
   var lastCol = sheet.getLastColumn();
   if (lastCol < COL_FIRST) return null;
-  var startCol = Math.max(COL_FIRST, lastCol - 1);
-  var row1 = sheet.getRange(ROW_HEADER, startCol, ROW_HEADER, lastCol).getDisplayValues()[0];
-  var h0 = (row1[RANGE_INDEX_FIRST] && String(row1[RANGE_INDEX_FIRST]).trim()) || "";
-  var h1 = (row1[RANGE_INDEX_SECOND] != null ? String(row1[RANGE_INDEX_SECOND]).trim() : "") || "";
-  if (h0 === QUICK_SEARCH_MATCH_HEADER) {
-    return { matchColIndex: startCol, criteriaColIndex: startCol + 1 };
-  }
-  if (h1 === QUICK_SEARCH_MATCH_HEADER) {
-    return { matchColIndex: lastCol, criteriaColIndex: lastCol + 1 };
-  }
-  if (h0 === QUICK_SEARCH_CRITERIA_HEADER) {
-    return { matchColIndex: startCol - 1, criteriaColIndex: startCol };
-  }
-  if (h1 === QUICK_SEARCH_CRITERIA_HEADER) {
-    return { matchColIndex: lastCol - 1, criteriaColIndex: lastCol };
-  }
-  return null;
+  var resolved = quickSearchResolveHelperColumnsFromSheet_(sheet);
+  if (resolved.matchColIndex == null) return null;
+  if (resolved.needCriteriaInsert) return null;
+  return { matchColIndex: resolved.matchColIndex, criteriaColIndex: resolved.criteriaColIndex };
 }
 
 /** Returns cached criteria column index (1-based) from Document Properties, or null if not set. */
@@ -654,19 +910,86 @@ function writeQuickSearchCriteria(criteriaJson, refreshView) {
   var sheet = getQuickSearchSheet(ss, cached.sheetIdCached);
   timing.getSheetMs = Date.now() - t1;
   timing.getColMs = 0;
-  if (!sheet) return { ok: false, message: "Transactions sheet not found.", serverMs: Date.now() - t0, timingBreakdown: timing };
+  if (!sheet) {
+    return {
+      ok: false,
+      message: "Transactions sheet not found.",
+      serverMs: Date.now() - t0,
+      timingBreakdown: timing,
+      agentDebug: { sessionId: "8efe09", hypothesisId: "H8", location: "writeQuickSearchCriteria", phase: "no_transactions_sheet" }
+    };
+  }
 
   var criteriaColIndex = cached.criteriaColIndex;
   if (criteriaColIndex == null || criteriaColIndex < 1) {
-    return { ok: false, message: "Quick Search not set up. Run setup first.", serverMs: Date.now() - t0, timingBreakdown: timing };
+    return {
+      ok: false,
+      message: "Quick Search not set up. Run setup first.",
+      serverMs: Date.now() - t0,
+      timingBreakdown: timing,
+      agentDebug: {
+        sessionId: "8efe09",
+        hypothesisId: "H2",
+        location: "writeQuickSearchCriteria",
+        phase: "criteria_col_not_cached",
+        cachedCriteriaCol: criteriaColIndex,
+        sheetLastCol: sheet.getLastColumn()
+      }
+    };
   }
   // When criteria cell is empty, getLastColumn() can be Match column (one less); only treat as not set up if criteria column is beyond that.
   if (criteriaColIndex > sheet.getLastColumn() + 1) {
-    return { ok: false, message: "Quick Search not set up. Run setup first.", serverMs: Date.now() - t0, timingBreakdown: timing };
+    return {
+      ok: false,
+      message: "Quick Search not set up. Run setup first.",
+      serverMs: Date.now() - t0,
+      timingBreakdown: timing,
+      agentDebug: {
+        sessionId: "8efe09",
+        hypothesisId: "H2",
+        location: "writeQuickSearchCriteria",
+        phase: "criteria_col_index_out_of_range",
+        cachedCriteriaCol: criteriaColIndex,
+        sheetLastCol: sheet.getLastColumn()
+      }
+    };
   }
 
   var descError = quickSearchDescriptionRegexUnsupported(criteria.description);
-  if (descError) return { ok: false, message: descError, serverMs: Date.now() - t0, timingBreakdown: timing };
+  if (descError) {
+    return {
+      ok: false,
+      message: descError,
+      serverMs: Date.now() - t0,
+      timingBreakdown: timing,
+      agentDebug: { sessionId: "8efe09", hypothesisId: "H9", location: "writeQuickSearchCriteria", phase: "description_regex_blocked" }
+    };
+  }
+
+  if (!quickSearchMatchColumnHasOurArrayFormula_(sheet, criteriaColIndex)) {
+    var matchFp = "";
+    try {
+      matchFp = (sheet.getRange(ROW_HEADER, criteriaColIndex - 1).getFormula() || "").substring(0, 80);
+    } catch (eM) {
+      matchFp = "(read_error)";
+    }
+    return {
+      ok: false,
+      message: "Quick Search not set up. Run setup first.",
+      serverMs: Date.now() - t0,
+      timingBreakdown: timing,
+      agentDebug: {
+        sessionId: "8efe09",
+        hypothesisId: "H11",
+        location: "writeQuickSearchCriteria",
+        phase: "match_column_missing_our_quicksearch_formula",
+        cachedCriteriaCol: criteriaColIndex,
+        expectedMatchCol: criteriaColIndex - 1,
+        matchColFormulaPrefix: matchFp,
+        sheetLastCol: sheet.getLastColumn()
+      }
+    };
+  }
 
   var t3 = Date.now();
   var criteriaString = buildQuickSearchCriteriaString(criteria);
@@ -677,6 +1000,25 @@ function writeQuickSearchCriteria(criteriaJson, refreshView) {
   timing.setValueMs = Date.now() - t4;
 
   var out = { ok: true, message: "Criteria updated.", serverMs: Date.now() - t0, timingBreakdown: timing };
+  // #region agent log
+  try {
+    var r1Snippet = "";
+    try {
+      var dv = sheet.getRange(ROW_HEADER, criteriaColIndex).getDisplayValue();
+      r1Snippet = dv != null ? String(dv).substring(0, 80) : "";
+    } catch (eR1) { r1Snippet = "(read_error)"; }
+    out.agentDebug = {
+      sessionId: "8efe09",
+      hypothesisId: "H2",
+      location: "writeQuickSearchCriteria",
+      phase: "write_ok",
+      cachedCriteriaCol: criteriaColIndex,
+      sheetLastCol: sheet.getLastColumn(),
+      row1CriteriaDisplayPrefix: r1Snippet,
+      row1Tail: quickSearchRow1TailSamples_(sheet, sheet.getLastColumn(), 8)
+    };
+  } catch (eDbg) { /* ignore */ }
+  // #endregion
   if (refreshView) {
     SpreadsheetApp.flush();
     var ref = refreshQuickSearchFilterView(sheet, criteriaColIndex, ss.getId(), sheet.getSheetId());
@@ -692,7 +1034,11 @@ function writeQuickSearchCriteria(criteriaJson, refreshView) {
 function applyQuickSearch(criteriaJson) {
   var setup = ensureQuickSearchSetup();
   if (!setup.ok) return setup;
-  return writeQuickSearchCriteria(criteriaJson, true);
+  var w = writeQuickSearchCriteria(criteriaJson, true);
+  if (setup.agentDebug) {
+    w.setupAgentDebug = setup.agentDebug;
+  }
+  return w;
 }
 
 /**
