@@ -7,6 +7,8 @@
 
 This software is produced by a Tiller user and is not affiliated with Tiller LLC.
 
+Code is here, but recommend you install from Google Marketplace: https://workspace.google.com/marketplace/app/tiller_tools_by_dave/135351721412 
+
 ## Tiller Amazon Import Process
 
 1. Request your orders.zip data file from Amazon https://www.amazon.com/hz/privacy-central/data-requests/preview.html
