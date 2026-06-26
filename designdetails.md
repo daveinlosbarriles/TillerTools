@@ -70,6 +70,8 @@ Almost everything that would break if Amazon or Tiller renamed a column is drive
 
 Configuration is read by `readAmzImportConfig` and validated by `validateAmzImportConfig`. Hard-coded **defaults** exist only to **seed** a new tab (`AMZ_IMPORT_DEFAULTS`, `getOrCreateAmzImportSheet`).
 
+**Upgrade path:** When **AMZ Import** already exists, `getOrCreateAmzImportSheet` calls `amzEnsureUnifiedCsvMapOnSheet_`, which compares the sheet’s CSV map to `amzGetDefaultUnifiedCsvMapRows_()` and **inserts** any missing rows **immediately before** the Tiller labels table (reusing the blank separator row when present). Rows below (Tiller labels, payment table) are shifted down — never overwritten. Requires the unified map header row (`Source file` / `Header` / `Name in code` / `Metadata field name`); tabs without it must still be deleted and recreated. Matching is by canonical source file + **Name in code** (so `Returns.csv` and `Refund Details.csv` share keys).
+
 | Area | Storage on sheet | Purpose | Pipelines / consumers |
 |------|------------------|---------|------------------------|
 | **Payment → account** | Table: Payment Type, Account, …, Use for Digital | Map Amazon payment **string** to Tiller account fields; exactly one **Yes** for digital | Orders (standard), offsets, `analyzePaymentMethodsForOrderHistory`; digital user row for digital **orders** |
@@ -97,13 +99,18 @@ Re-importing the same Amazon rows should not create duplicates. The importer bui
 - `amzGetLastTransactionDataRow` — last row with a **Date** (not merely “last row”).
 - `amzAppendDuplicateKeysFromTransactions_` and `amzAppendLegacyDuplicateKeysFromFullDescription_`.
 
-**Key shapes (by `amazon.type` and patterns):** e.g. `physical-purchase-line|orderId|normalizedAsinOrIsbn`, `digital-purchase|orderId`, `refund-detail|orderId|amount`, `legacy-return|orderId|contractId` (from metadata `type: "return"` or Full Description), `digital-return|orderId|asin`, plus `*-offset` types — see `amzAddDedupKeysForAmazonMeta_` and `amzAddDedupKeysFromFullDescriptionLine_`.
+**Key shapes (by `amazon.type` and patterns):** e.g. `physical-purchase-line|orderId|normalizedAsinOrIsbn|lineSuffix` (current physical line items), legacy `physical-purchase-line|orderId|normalizedAsinOrIsbn` (pre–line-key imports), `digital-purchase|orderId`, `refund-detail|orderId|amount`, `legacy-return|orderId|contractId` (from metadata `type: "return"` or Full Description), `digital-return|orderId|asin`, plus `*-offset` types — see `amzAddDedupKeysForAmazonMeta_` and `amzAddDedupKeysFromFullDescriptionLine_`.
+
+**Physical line suffix (`lineKey` in metadata):** `{qty}|{unitPrice2dp}|{lineTotal2dp}|{shipDate}|{carrier}`; for `_ASINLESS_` rows, prefix with a normalized product-name slug: `{slug}|{qty}|…`. Same ASIN on one order with different qty, price, ship date, or carrier gets distinct keys (separate fulfillments or by-weight lines). Identical CSV repeats (all suffix fields match) still dedupe.
+
+**Grocery whole-order rule (Whole Foods / Amazon Fresh):** On re-import, if the sheet already has **any** grocery purchase line for an Order ID (`site` = `panda01`, metadata `grocery: true`, or legacy `_ASINLESS_`), **all** CSV lines for that order are skipped — partial legacy WF imports are not backfilled. First import on an empty sheet uses line-level keys only (every line imports).
 
 **Orders returns:** Amazon’s standard **Refund Details** export does **not** include **Contract ID** (see §11). **Legacy-return** dedup for refunds therefore comes from existing sheet rows (**Metadata** with `type: "return"` or **Full Description** `… with Contract ID …`). If you ever map an optional **Contract ID** column on **AMZ Import** and the file contains it, import also treats `legacy-return|…` as a duplicate key for CSV-side checks.
 
 **During import:**
 
 - New rows: check `Set` before append; increment duplicate counter if key already present.
+- Physical purchases: match full `physical-purchase-line|orderId|asin|lineSuffix` **or**, when the sheet has only legacy rows (no `lineKey` for that order+asin), the 3-part `physical-purchase-line|orderId|asin` from Metadata or Full Description scan — so re-imports after the line-key upgrade dedupe against older installs with no user cleanup.
 - New keys are added to the set as rows are queued so **within-file** duplicates are also caught.
 
 ---

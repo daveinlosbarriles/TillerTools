@@ -101,7 +101,8 @@ const AMZ_SEED_UNIFIED_OH_DO_ROWS = [
   ["Total Discounts", "", "Total Discounts"],
   ["Unit Price", "Price", "Unit Price"],
   ["Unit Price Tax", "Price Tax", "Unit Price Tax"],
-  ["Website", "", "Website"]
+  ["Website", "", "Website"],
+  ["Order Status", "Order Status", "Order Status"]
 ];
 
 /** Seed data: metadata keys matching OH/DO column pairs in {@link AMZ_SEED_UNIFIED_OH_DO_ROWS}. */
@@ -118,7 +119,8 @@ const AMZ_SEED_UNIFIED_METADATA_ROWS = [
   ["Payment Method Type", "Payment Information", "payment-type"],
   ["Website", "", "site"],
   ["Purchase Order Number", "", "purchase-order"],
-  ["purchase", "", "type"]
+  ["purchase", "", "type"],
+  ["Order Status", "Order Status", "order-status"]
 ];
 
 /** Basename, lowercased, forward slashes (for Source file column). */
@@ -266,7 +268,7 @@ function amzIsAmzPaymentTableBoundaryRow(fcNormalized) {
   return false;
 }
 
-/** Whole Foods / Amazon Fresh rows in Order History use Website = panda01 (case-insensitive). */
+/** Whole Foods in Order History use Website = panda01. Amazon Fresh often uses Website = Amazon.com with Fresh shipping/carrier signals. */
 const AMZ_WHOLE_FOODS_WEBSITE = "panda01";
 
 /** Amazon import helpers: distinct names from QuickSearchSidebar.gs (same project global scope). */
@@ -533,6 +535,422 @@ function amzResolveRefundDetailsOrderDate_(r, col, config) {
 }
 
 /**
+ * Parse an Amazon CSV currency/amount cell (US format: optional $, thousands commas).
+ * European 3.473,93 is not supported.
+ * @param {*} raw
+ * @returns {{ value: number|null, isMissing: boolean }}
+ */
+function amzParseCsvAmount_(raw) {
+  if (raw === "" || raw === undefined || raw === null) {
+    return { value: null, isMissing: true };
+  }
+  const s = String(raw).trim();
+  if (!s || /not\s+available/i.test(s)) {
+    return { value: null, isMissing: true };
+  }
+  const cleaned = s.replace(/[$\s\u00A0]/g, "").replace(/,/g, "");
+  const n = parseFloat(cleaned);
+  if (!isFinite(n)) {
+    return { value: null, isMissing: true };
+  }
+  return { value: n, isMissing: false };
+}
+
+/**
+ * @param {Array<string>} lines
+ * @param {number} count
+ */
+function amzAppendBlankAmountImportNotice_(lines, count) {
+  if (count > 0 && lines) {
+    lines.push(
+      count +
+        " transaction row(s) imported with blank Amount (Amazon value was missing or unparseable)."
+    );
+  }
+}
+
+/**
+ * @param {Array} row
+ * @param {Object<string, number>} col
+ * @param {string} orderStatusCol
+ * @returns {string}
+ */
+function amzGetCsvOrderStatus_(row, col, orderStatusCol) {
+  if (!orderStatusCol || col[orderStatusCol] === undefined) return "";
+  const raw = row[col[orderStatusCol]];
+  return raw == null ? "" : String(raw).trim();
+}
+
+/** @param {string} status */
+function amzShouldSkipDigitalOrderStatus_(status) {
+  return /pending/i.test(String(status || ""));
+}
+
+/** @param {string} status */
+function amzShouldSkipPhysicalOrderStatus_(status) {
+  return /cancel/i.test(String(status || ""));
+}
+
+/**
+ * True when Order History row signals Whole Foods or Amazon Fresh grocery (not regular Amazon.com retail).
+ * @param {Array} row
+ * @param {Object<string, number>} col
+ * @param {string} websiteColName
+ * @returns {boolean}
+ */
+function amzIsGroceryOrderHistoryRow_(row, col, websiteColName) {
+  if (websiteColName && col[websiteColName] !== undefined) {
+    const website = String(row[col[websiteColName]] || "").trim().toLowerCase();
+    if (website === AMZ_WHOLE_FOODS_WEBSITE) return true;
+  }
+  if (col["Shipping Option"] !== undefined) {
+    const shipOpt = String(row[col["Shipping Option"]] || "").trim().toLowerCase();
+    if (shipOpt.indexOf("scheduled-houdini") >= 0) return true;
+  }
+  const carrierHeaders = ["Carrier Name & Tracking Number", "Carrier Name"];
+  for (let ci = 0; ci < carrierHeaders.length; ci++) {
+    const h = carrierHeaders[ci];
+    if (col[h] === undefined) continue;
+    const carrier = String(row[col[h]] || "").trim();
+    if (/^RABBIT\(/i.test(carrier)) return true;
+  }
+  return false;
+}
+
+/**
+ * @param {Object<string, number>} col
+ * @param {string} websiteColName
+ * @returns {boolean}
+ */
+function amzCanClassifyGroceryOrderHistoryRows_(col, websiteColName) {
+  if (websiteColName && col[websiteColName] !== undefined) return true;
+  if (col["Shipping Option"] !== undefined) return true;
+  if (col["Carrier Name & Tracking Number"] !== undefined) return true;
+  if (col["Carrier Name"] !== undefined) return true;
+  return false;
+}
+
+/** @param {string} tokenK normalized ASIN token */
+function amzIsAsinlessPurchaseToken_(tokenK) {
+  return String(tokenK || "").trim().toUpperCase() === "_ASINLESS_";
+}
+
+/**
+ * @param {string} productName
+ * @returns {string}
+ */
+function amzNormalizeProductDedupSlug_(productName) {
+  let s = String(productName == null ? "" : productName).trim().toLowerCase();
+  s = s.replace(/\|/g, " ");
+  s = s.replace(/\s+/g, " ");
+  if (s.length > 80) s = s.substring(0, 80);
+  return s;
+}
+
+/** @param {*} raw */
+function amzNormalizeDedupShipDate_(raw) {
+  if (raw == null || raw === "") return "";
+  return String(raw).trim();
+}
+
+/** @param {*} raw */
+function amzNormalizeDedupCarrier_(raw) {
+  if (raw == null || raw === "") return "";
+  return String(raw).trim();
+}
+
+/**
+ * @param {Array} row
+ * @param {Object<string, number>} col
+ * @returns {string}
+ */
+function amzGetCsvCarrierForDedup_(row, col) {
+  const headers = ["Carrier Name & Tracking Number", "Carrier Name"];
+  for (let i = 0; i < headers.length; i++) {
+    const h = headers[i];
+    if (col[h] === undefined) continue;
+    const raw = row[col[h]];
+    return raw == null ? "" : String(raw).trim();
+  }
+  return "";
+}
+
+/** @param {*} raw */
+function amzDedupAmountPart_(raw) {
+  const parsed = amzParseCsvAmount_(raw);
+  return parsed.isMissing ? "" : Number(parsed.value).toFixed(2);
+}
+
+/**
+ * Line-item suffix for physical purchase dedup (stored in metadata lineKey).
+ * @param {*} asinRaw
+ * @param {*} productName
+ * @param {*} quantityRaw
+ * @param {*} unitPriceRaw
+ * @param {*} lineTotalRaw
+ * @param {*} shipDateRaw
+ * @param {*} carrierRaw
+ * @returns {string}
+ */
+function amzPhysicalPurchaseLineSuffix_(
+  asinRaw,
+  productName,
+  quantityRaw,
+  unitPriceRaw,
+  lineTotalRaw,
+  shipDateRaw,
+  carrierRaw
+) {
+  const asinK = amzNormalizePurchaseDedupToken_(asinRaw);
+  const qty = String(quantityRaw == null ? "" : quantityRaw).trim();
+  const unitP = amzDedupAmountPart_(unitPriceRaw);
+  const lineT = amzDedupAmountPart_(lineTotalRaw);
+  const ship = amzNormalizeDedupShipDate_(shipDateRaw);
+  const car = amzNormalizeDedupCarrier_(carrierRaw);
+  let core = qty + "|" + unitP + "|" + lineT + "|" + ship + "|" + car;
+  if (amzIsAsinlessPurchaseToken_(asinK)) {
+    const slug = amzNormalizeProductDedupSlug_(productName);
+    if (slug) core = slug + "|" + core;
+  }
+  return core;
+}
+
+/**
+ * @param {*} orderId
+ * @param {*} asinRaw
+ * @param {*} productName
+ * @param {*} quantityRaw
+ * @param {*} unitPriceRaw
+ * @param {*} lineTotalRaw
+ * @param {*} shipDateRaw
+ * @param {*} carrierRaw
+ * @returns {string}
+ */
+function amzPhysicalPurchaseLineDedupKey_(
+  orderId,
+  asinRaw,
+  productName,
+  quantityRaw,
+  unitPriceRaw,
+  lineTotalRaw,
+  shipDateRaw,
+  carrierRaw
+) {
+  const oid = String(orderId == null ? "" : orderId).trim();
+  const asinK = amzNormalizePurchaseDedupToken_(asinRaw);
+  const suffix = amzPhysicalPurchaseLineSuffix_(
+    asinRaw,
+    productName,
+    quantityRaw,
+    unitPriceRaw,
+    lineTotalRaw,
+    shipDateRaw,
+    carrierRaw
+  );
+  return "physical-purchase-line|" + oid + "|" + asinK + "|" + suffix;
+}
+
+/**
+ * Pre-lineKey import dedup shape (metadata scan still indexes these for legacy rows).
+ * @param {*} orderId
+ * @param {*} asinRaw
+ * @returns {string}
+ */
+function amzLegacyPhysicalPurchaseDedupKey_(orderId, asinRaw) {
+  const oid = String(orderId == null ? "" : orderId).trim();
+  const asinK = amzNormalizePurchaseDedupToken_(asinRaw);
+  if (!oid || !asinK) return "";
+  return "physical-purchase-line|" + oid + "|" + asinK;
+}
+
+/**
+ * True when the dedup set has any line-suffixed key for a legacy order|asin prefix.
+ * @param {Set<string>} setObj
+ * @param {string} legacyKey
+ * @returns {boolean}
+ */
+function amzSheetHasLineKeyedPurchaseForOrderAsin_(setObj, legacyKey) {
+  if (!legacyKey) return false;
+  const prefix = legacyKey + "|";
+  for (const k of setObj) {
+    if (String(k).indexOf(prefix) === 0) return true;
+  }
+  return false;
+}
+
+/**
+ * True when this CSV line is already represented on the sheet.
+ * Matches full line-level keys, and legacy order|asin keys only when the sheet has no lineKey rows
+ * for that order+asin (so older imports dedupe on re-import without user cleanup, while multi-shipment
+ * lines with lineKey still dedupe per fulfillment).
+ * @param {Set<string>} setObj
+ * @param {string} dupKeyPurchase
+ * @param {*} orderId
+ * @param {*} asinRaw
+ * @returns {boolean}
+ */
+function amzIsDuplicatePhysicalPurchaseKey_(setObj, dupKeyPurchase, orderId, asinRaw) {
+  if (setObj.has(dupKeyPurchase)) return true;
+  const legacy = amzLegacyPhysicalPurchaseDedupKey_(orderId, asinRaw);
+  if (legacy === "" || !setObj.has(legacy)) return false;
+  if (amzSheetHasLineKeyedPurchaseForOrderAsin_(setObj, legacy)) return false;
+  return true;
+}
+
+/** @param {Object} amz parsed metadata.amazon */
+function amzIsGroceryPurchaseMeta_(amz) {
+  if (!amz || amz.type == null || String(amz.type).trim() !== "purchase") return false;
+  if (amz.lineItemCount != null && String(amz.lineItemCount).trim() !== "") return false;
+  if (amz.grocery === true || amz.grocery === "true") return true;
+  const site = amz.site != null ? String(amz.site).trim().toLowerCase() : "";
+  if (site === AMZ_WHOLE_FOODS_WEBSITE) return true;
+  const lineAsin = amz.isbn != null && String(amz.isbn).trim() !== "" ? amz.isbn : amz.asin;
+  if (amzIsAsinlessPurchaseToken_(amzNormalizePurchaseDedupToken_(lineAsin))) return true;
+  return false;
+}
+
+/**
+ * @param {Array} row
+ * @returns {boolean}
+ */
+function amzCsvMapTableRowIsBlank_(row) {
+  if (!row) return true;
+  const ncol = AMZ_IMPORT_DEFAULTS.TABLE_CSV_HEADERS.length;
+  for (let c = 0; c < ncol; c++) {
+    if (row[c] != null && String(row[c]).trim() !== "") return false;
+  }
+  return true;
+}
+
+/**
+ * Stable key for unified CSV map row: canonical source file + Name in code.
+ * @param {string} rawSource
+ * @param {string} nameInCode
+ * @returns {string}
+ */
+function amzCsvMapRowKey_(rawSource, nameInCode) {
+  const canon = amzCanonicalCsvSourceFile_(rawSource);
+  const nc = nameInCode != null ? String(nameInCode).trim() : "";
+  if (!canon || !nc) return "";
+  return canon + "|" + nc;
+}
+
+/**
+ * True when the sheet has the unified CSV map header row.
+ * @param {Array<Array>} data
+ * @returns {boolean}
+ */
+function amzSheetHasUnifiedCsvMapHeader_(data) {
+  for (let i = 0; i < data.length; i++) {
+    const c0 = data[i][0] != null ? String(data[i][0]).trim() : "";
+    const c1 = data[i][1] != null ? String(data[i][1]).trim() : "";
+    const c2 = data[i][2] != null ? String(data[i][2]).trim() : "";
+    const c3 = data[i][3] != null ? String(data[i][3]).trim() : "";
+    if (c0 === "Source file" && c1 === "Header" && c2 === "Name in code" && c3 === "Metadata field name") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 1-based row index where new CSV map rows are inserted (immediately before Tiller TABLE4).
+ * @param {Array<Array>} data
+ * @returns {number}
+ */
+function amzFindCsvMapInsertBeforeRow1_(data) {
+  for (let i = 0; i < data.length; i++) {
+    const first = data[i][0] != null ? String(data[i][0]).trim() : "";
+    if (first === AMZ_IMPORT_DEFAULTS.TABLE4_TITLE || first === "Sheet and Column labels used from Tiller") {
+      return i + 1;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Keys already present in the unified CSV map section.
+ * @param {Array<Array>} data
+ * @returns {Object<string, boolean>}
+ */
+function amzExistingCsvMapKeys_(data) {
+  const keys = Object.create(null);
+  let inMap = false;
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+    const c0 = row[0] != null ? String(row[0]).trim() : "";
+    const c1 = row[1] != null ? String(row[1]).trim() : "";
+    const c2 = row[2] != null ? String(row[2]).trim() : "";
+    const c3 = row[3] != null ? String(row[3]).trim() : "";
+    if (c0 === "Source file" && c1 === "Header" && c2 === "Name in code") {
+      inMap = true;
+      continue;
+    }
+    if (!inMap) continue;
+    if (c0 === AMZ_IMPORT_DEFAULTS.TABLE4_TITLE || c0 === "Sheet and Column labels used from Tiller") break;
+    if (!c0 && !c1 && !c2 && !c3) continue;
+    if (c0.indexOf("Each row maps one Amazon export column") === 0) break;
+    const k = amzCsvMapRowKey_(c0, c2);
+    if (k) keys[k] = true;
+  }
+  return keys;
+}
+
+/**
+ * Insert CSV map rows before TABLE4 without overwriting the Tiller labels section below.
+ * Reuses the blank separator row above TABLE4 when present.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} amzSheet
+ * @param {Array<Array>} data
+ * @param {number} insertBeforeRow1
+ * @param {Array<Array<string>>} toAdd
+ */
+function amzInsertCsvMapRowsBeforeTillerSection_(amzSheet, data, insertBeforeRow1, toAdd) {
+  if (!toAdd || !toAdd.length || insertBeforeRow1 < 1) return;
+  const ncol = AMZ_IMPORT_DEFAULTS.TABLE_CSV_HEADERS.length;
+  const tillerRow1 = insertBeforeRow1;
+  const blankIdx = tillerRow1 - 2;
+  const canReuseBlank = blankIdx >= 0 && amzCsvMapTableRowIsBlank_(data[blankIdx]);
+
+  if (canReuseBlank) {
+    const startRow1 = tillerRow1 - 1;
+    amzSheet.getRange(startRow1, 1, 1, ncol).setValues([toAdd[0]]);
+    if (toAdd.length > 1) {
+      amzSheet.insertRowsBefore(tillerRow1, toAdd.length - 1);
+      amzSheet.getRange(startRow1 + 1, 1, toAdd.length - 1, ncol).setValues(toAdd.slice(1));
+    }
+  } else {
+    amzSheet.insertRowsBefore(tillerRow1, toAdd.length);
+    amzSheet.getRange(tillerRow1, 1, toAdd.length, ncol).setValues(toAdd);
+  }
+}
+
+/**
+ * On upgrade, append any missing default CSV map rows (Order Status, Website, Ship Date, …).
+ * Inserts new rows immediately before the Tiller labels table; sections below are shifted down, not overwritten.
+ * No-op when the unified map header is missing (user must delete AMZ Import to recreate).
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} amzSheet
+ */
+function amzEnsureUnifiedCsvMapOnSheet_(amzSheet) {
+  const data = amzSheet.getDataRange().getValues();
+  if (!amzSheetHasUnifiedCsvMapHeader_(data)) return;
+  const insertBeforeRow1 = amzFindCsvMapInsertBeforeRow1_(data);
+  if (insertBeforeRow1 < 1) return;
+
+  const existingKeys = amzExistingCsvMapKeys_(data);
+  const defaults = amzGetDefaultUnifiedCsvMapRows_();
+  const toAdd = [];
+  for (let d = 0; d < defaults.length; d++) {
+    const def = defaults[d];
+    const k = amzCsvMapRowKey_(def[0], def[2]);
+    if (!k || existingKeys[k]) continue;
+    toAdd.push(def);
+    existingKeys[k] = true;
+  }
+  if (!toAdd.length) return;
+  amzInsertCsvMapRowsBeforeTillerSection_(amzSheet, data, insertBeforeRow1, toAdd);
+}
+
+/**
  * Sum Refund Amount for one Order ID after dropping duplicate CSV lines that repeat the same
  * refund event (same amount and resolved Refund/Creation date — Amazon often repeats rows e.g. by Quantity).
  * @param {Array<Array>} rows - CSV rows for one order
@@ -545,8 +963,9 @@ function amzDedupedRefundSumForOrder_(rows, col, refundAmountCol, config) {
   const seen = Object.create(null);
   let sum = 0;
   for (let j = 0; j < rows.length; j++) {
-    const v = parseFloat(rows[j][col[refundAmountCol]]);
-    if (isNaN(v)) continue;
+    const parsed = amzParseCsvAmount_(rows[j][col[refundAmountCol]]);
+    if (parsed.isMissing) continue;
+    const v = parsed.value;
     const d = amzResolveRefundDetailsOrderDate_(rows[j], col, config);
     const amtKey = Number(v).toFixed(2);
     const datePart = d && !isNaN(d.getTime()) ? String(d.getTime()) : "nodate:" + j;
@@ -560,6 +979,50 @@ function amzDedupedRefundSumForOrder_(rows, col, refundAmountCol, config) {
 
 /** Max full skipped CSV rows to echo into the import log (status panel). */
 const AMZ_MAX_SKIPPED_CSV_ROW_DUMPS = 20;
+
+/** Max order IDs listed in bulk skip debug (cancel / grocery / pending). */
+const AMZ_MAX_SKIPPED_ORDER_IDS_LISTED = 20;
+
+/**
+ * @param {Set<string>} setObj
+ * @param {*} orderIdRaw
+ */
+function amzTrackSkippedOrderId_(setObj, orderIdRaw) {
+  if (!setObj) return;
+  const oid = String(orderIdRaw == null ? "" : orderIdRaw).trim();
+  if (oid) setObj.add(oid);
+}
+
+/**
+ * Compact debug line: order IDs only (no full CSV row dump).
+ * @param {Array<string>} timing
+ * @param {string} reasonLabel
+ * @param {number} lineItemCount
+ * @param {Set<string>} orderIdSet
+ * @param {string} [countNoun] defaults to "line item(s)"
+ */
+function amzAppendSkippedOrderIdsDebug_(timing, reasonLabel, lineItemCount, orderIdSet, countNoun) {
+  if (!timing || !orderIdSet || orderIdSet.size < 1) return;
+  const noun = countNoun != null ? countNoun : "line item(s)";
+  const ids = Array.from(orderIdSet).sort();
+  const max = AMZ_MAX_SKIPPED_ORDER_IDS_LISTED;
+  const shown = ids.slice(0, max);
+  let msg =
+    "Server: " +
+    reasonLabel +
+    " — " +
+    lineItemCount +
+    " " +
+    noun +
+    ", " +
+    orderIdSet.size +
+    " order" +
+    (orderIdSet.size === 1 ? "" : "s") +
+    ": " +
+    shown.join(", ");
+  if (ids.length > max) msg += " (+" + (ids.length - max) + " more order IDs)";
+  timing.push(msg);
+}
 
 /**
  * Append one skipped-row detail line for the sidebar status log (not filtered as "Server:" lines).
@@ -1095,13 +1558,12 @@ function analyzePaymentMethodsForOrderHistory(csvText, cutoffDateIso, includePhy
     orderDate.setHours(0, 0, 0, 0);
     if (cutoffStart && orderDate < cutoffStart) continue;
 
-    let isWf = false;
-    if (websiteColName && col[websiteColName] !== undefined) {
-      const wf = String(r[col[websiteColName]] || "").trim().toLowerCase();
-      isWf = wf === AMZ_WHOLE_FOODS_WEBSITE;
+    let isGrocery = false;
+    if (amzCanClassifyGroceryOrderHistoryRows_(col, websiteColName)) {
+      isGrocery = amzIsGroceryOrderHistoryRow_(r, col, websiteColName);
     }
-    if (skipPanda01 && isWf) continue;
-    if (skipNonPanda01 && !isWf) continue;
+    if (skipPanda01 && isGrocery) continue;
+    if (skipNonPanda01 && !isGrocery) continue;
 
     const pt = String(r[col[paymentMethodColName]] || "").trim();
     if (pt) paymentTypes[pt] = true;
@@ -1985,14 +2447,15 @@ function amzGetLastTransactionDataRow(sheet, tillerCols, tillerLabels) {
  * @param {Object} tillerLabels
  * @param {number} lastDataRow
  * @param {Set<string>} existingSet
+ * @param {Set<string>} [priorGroceryOrderIds]
  */
-function amzAppendDuplicateKeysFromTransactions_(sheet, tillerCols, tillerLabels, lastDataRow, existingSet) {
+function amzAppendDuplicateKeysFromTransactions_(sheet, tillerCols, tillerLabels, lastDataRow, existingSet, priorGroceryOrderIds) {
   if (lastDataRow < 2) return;
   const metaCol = amzGetTillerColumnIndex_(tillerCols, tillerLabels.METADATA);
   if (!metaCol) return;
   const metas = sheet.getRange(2, metaCol, lastDataRow, 1).getValues();
   for (let j = 0; j < metas.length; j++) {
-    amzAddDuplicateKeysFromImportMetadataCell_(metas[j][0], existingSet);
+    amzAddDuplicateKeysFromImportMetadataCell_(metas[j][0], existingSet, priorGroceryOrderIds);
   }
 }
 
@@ -2019,22 +2482,24 @@ function amzLastParenToken_(s) {
  * @param {Object} tillerLabels
  * @param {number} lastDataRow
  * @param {Set<string>} existingSet
+ * @param {Set<string>} [priorGroceryOrderIds]
  */
-function amzAppendLegacyDuplicateKeysFromFullDescription_(sheet, tillerCols, tillerLabels, lastDataRow, existingSet) {
+function amzAppendLegacyDuplicateKeysFromFullDescription_(sheet, tillerCols, tillerLabels, lastDataRow, existingSet, priorGroceryOrderIds) {
   if (lastDataRow < 2) return;
   const fdCol = amzGetTillerColumnIndex_(tillerCols, tillerLabels.FULL_DESCRIPTION);
   if (!fdCol) return;
   const vals = sheet.getRange(2, fdCol, lastDataRow, 1).getValues();
   for (let j = 0; j < vals.length; j++) {
-    amzAddDedupKeysFromFullDescriptionLine_(vals[j][0], existingSet);
+    amzAddDedupKeysFromFullDescriptionLine_(vals[j][0], existingSet, priorGroceryOrderIds);
   }
 }
 
 /**
  * @param {*} lineValue
  * @param {Set<string>} existingSet
+ * @param {Set<string>} [priorGroceryOrderIds]
  */
-function amzAddDedupKeysFromFullDescriptionLine_(lineValue, existingSet) {
+function amzAddDedupKeysFromFullDescriptionLine_(lineValue, existingSet, priorGroceryOrderIds) {
   if (lineValue == null || lineValue === "") return;
   const t = String(lineValue).trim();
   if (!t) return;
@@ -2050,20 +2515,28 @@ function amzAddDedupKeysFromFullDescriptionLine_(lineValue, existingSet) {
 
   let m = t.match(/^\[AMZ\]\s+Order ID\s+([\d-]+)\s*:\s*(.+)$/);
   if (m) {
+    const oid = m[1].trim();
     const token = amzLastParenToken_(m[2]);
     if (token) {
       const norm = amzNormalizePurchaseDedupToken_(token);
-      if (norm) existingSet.add("physical-purchase-line|" + m[1].trim() + "|" + norm);
+      if (norm) {
+        existingSet.add("physical-purchase-line|" + oid + "|" + norm);
+        if (priorGroceryOrderIds && amzIsAsinlessPurchaseToken_(norm)) priorGroceryOrderIds.add(oid);
+      }
     }
     return;
   }
 
   m = t.match(/^Amazon Order ID\s+([\d-]+)\s*:\s*(.+)$/);
   if (m) {
+    const oid = m[1].trim();
     const token = amzLastParenToken_(m[2]);
     if (token) {
       const norm = amzNormalizePurchaseDedupToken_(token);
-      if (norm) existingSet.add("physical-purchase-line|" + m[1].trim() + "|" + norm);
+      if (norm) {
+        existingSet.add("physical-purchase-line|" + oid + "|" + norm);
+        if (priorGroceryOrderIds && amzIsAsinlessPurchaseToken_(norm)) priorGroceryOrderIds.add(oid);
+      }
     }
   }
 }
@@ -2096,8 +2569,9 @@ function amzNormalizePurchaseDedupToken_(s) {
  * Add stable dedup key(s) for one parsed {@code parsed.amazon} object (current and older metadata shapes).
  * @param {Object} amz
  * @param {Set<string>} setObj
+ * @param {Set<string>} [priorGroceryOrderIds]
  */
-function amzAddDedupKeysForAmazonMeta_(amz, setObj) {
+function amzAddDedupKeysForAmazonMeta_(amz, setObj, priorGroceryOrderIds) {
   if (!amz || amz.type == null || String(amz.type).trim() === "") return;
   const t = String(amz.type);
   if (t === "refund-detail" && amz.orderId != null) {
@@ -2156,15 +2630,22 @@ function amzAddDedupKeysForAmazonMeta_(amz, setObj) {
     }
     const lineAsin = amz.isbn != null && String(amz.isbn).trim() !== "" ? amz.isbn : amz.asin;
     const asinK = amzNormalizePurchaseDedupToken_(lineAsin);
-    setObj.add("physical-purchase-line|" + oid + "|" + asinK);
+    const lineKey = amz.lineKey != null ? String(amz.lineKey).trim() : "";
+    if (lineKey) {
+      setObj.add("physical-purchase-line|" + oid + "|" + asinK + "|" + lineKey);
+    } else {
+      setObj.add("physical-purchase-line|" + oid + "|" + asinK);
+    }
+    if (priorGroceryOrderIds && amzIsGroceryPurchaseMeta_(amz)) priorGroceryOrderIds.add(oid);
   }
 }
 
 /**
  * @param {*} metaCellValue
  * @param {Set<string>} setObj
+ * @param {Set<string>} [priorGroceryOrderIds]
  */
-function amzAddDuplicateKeysFromImportMetadataCell_(metaCellValue, setObj) {
+function amzAddDuplicateKeysFromImportMetadataCell_(metaCellValue, setObj, priorGroceryOrderIds) {
   if (metaCellValue == null || metaCellValue === "") return;
   const s = String(metaCellValue);
   const brace = s.indexOf("{");
@@ -2177,7 +2658,7 @@ function amzAddDuplicateKeysFromImportMetadataCell_(metaCellValue, setObj) {
   }
   const amz = parsed && parsed.amazon;
   if (!amz) return;
-  amzAddDedupKeysForAmazonMeta_(amz, setObj);
+  amzAddDedupKeysForAmazonMeta_(amz, setObj, priorGroceryOrderIds);
 }
 
 /**
@@ -2224,7 +2705,10 @@ function amzNotifyImportBundleFinished(elapsedSec, success, errSummary) {
 function getOrCreateAmzImportSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const existing = ss.getSheetByName(AMZ_IMPORT_SHEET_NAME);
-  if (existing) return { sheet: existing, wasCreated: false };
+  if (existing) {
+    amzEnsureUnifiedCsvMapOnSheet_(existing);
+    return { sheet: existing, wasCreated: false };
+  }
 
   const sheet = ss.insertSheet(AMZ_IMPORT_SHEET_NAME);
   let row = 1;
@@ -2576,8 +3060,8 @@ function amzBuildAmazonMetadataObject(csvRow, col, metadataMapping, isDigital, c
       if (raw === "" || raw === undefined || raw === null) {
         val = numericKeys.indexOf(k) >= 0 ? 0 : "";
       } else if (numericKeys.indexOf(k) >= 0) {
-        val = parseFloat(raw);
-        if (isNaN(val)) val = 0;
+        const parsedAmt = amzParseCsvAmount_(raw);
+        val = parsedAmt.isMissing ? 0 : parsedAmt.value;
       } else {
         val = String(raw).trim();
       }
@@ -2630,8 +3114,8 @@ function amzBuildAmazonMetadataObjectFromRows(
       for (let i = 0; i < rows.length; i++) {
         const raw = rows[i][col[resolvedSrc]];
         if (raw !== "" && raw !== undefined && raw !== null) {
-          const v = parseFloat(raw);
-          if (!isNaN(v)) sum += v;
+          const parsedAmt = amzParseCsvAmount_(raw);
+          if (!parsedAmt.isMissing) sum += parsedAmt.value;
         }
       }
       if (numericKeys.indexOf(k) >= 0) {
@@ -2785,13 +3269,15 @@ function importAmazonRecent(csvText, months, options) {
 
   const lastDataRow = amzGetLastTransactionDataRow(sheet, tillerCols, tillerLabels);
   const existingFullDescSet = new Set();
+  const priorGroceryOrderIds = new Set();
   const tDupStart = Date.now();
-  amzAppendDuplicateKeysFromTransactions_(sheet, tillerCols, tillerLabels, lastDataRow, existingFullDescSet);
-  amzAppendLegacyDuplicateKeysFromFullDescription_(sheet, tillerCols, tillerLabels, lastDataRow, existingFullDescSet);
+  amzAppendDuplicateKeysFromTransactions_(sheet, tillerCols, tillerLabels, lastDataRow, existingFullDescSet, priorGroceryOrderIds);
+  amzAppendLegacyDuplicateKeysFromFullDescription_(sheet, tillerCols, tillerLabels, lastDataRow, existingFullDescSet, priorGroceryOrderIds);
   const tDupEnd = Date.now();
   timing.push(
     "Server: scan Metadata + Full Description for dedup keys (" +
-    existingFullDescSet.size + " entries): " +
+    existingFullDescSet.size + " entries, " +
+    priorGroceryOrderIds.size + " prior grocery orders): " +
     ((tDupEnd - tDupStart) / 1000).toFixed(2) + " s"
   );
 
@@ -2801,6 +3287,7 @@ function importAmazonRecent(csvText, months, options) {
   const asinCol = amzGetCoreCsvColumn(config, "ASIN", isDigital);
   const totalAmountCol = amzGetCoreCsvColumn(config, "Total Amount", isDigital);
   const paymentMethodColName = amzGetCoreCsvColumn(config, "Payment Method Type", isDigital);
+  const orderStatusCol = amzGetCoreCsvColumn(config, "Order Status", isDigital);
 
   if (!orderDateCol || !orderIdCol || !productNameCol || !asinCol || !totalAmountCol) {
     return "AMZ Import is missing required core column mappings for this file type (CSV column map).";
@@ -2832,6 +3319,13 @@ function importAmazonRecent(csvText, months, options) {
   /** Per Order ID: { totalAmount (negative sum), orderDate, payKey, lineItemCount } for offset rows (one offset per order). */
   const perOrderOffset = {};
   let duplicateCount = 0;
+  let blankAmountRowCount = 0;
+  let skippedDigitalPendingOrderCount = 0;
+  let skippedPhysicalCancelCount = 0;
+  let skippedGroceryLineCount = 0;
+  const skippedCancelOrderIds = new Set();
+  const skippedGroceryOrderIds = new Set();
+  const skippedDigitalPendingOrderIds = new Set();
   const skippedRowDump = { n: 0 };
   let runTimestamp = new Date();
   let importTimestampStr = amzFormatImportTimestampStr_(runTimestamp);
@@ -2845,7 +3339,7 @@ function importAmazonRecent(csvText, months, options) {
   const csvDataRowCount = csv.length - 1;
   let aggregatedOrderCount = 0;
 
-  function pushOneRow(r, rowsForMeta, orderDate, orderID, productName, asin, amount, accountRow, payKey) {
+  function pushOneRow(r, rowsForMeta, orderDate, orderID, productName, asin, amount, accountRow, payKey, physMeta) {
     const month = Utilities.formatDate(orderDate, amzActiveSpreadsheetTimeZoneOrDefault_(), "yyyy-MM");
     const week = amzGetWeekStartDate(orderDate);
     const descShort = amzFormatPurchaseDescription_(isDigital, productName);
@@ -2876,6 +3370,11 @@ function importAmazonRecent(csvText, months, options) {
       if (!amazonMeta.type) amazonMeta.type = "purchase";
       amazonMeta.id = String(orderID == null ? "" : orderID).trim();
       amazonMeta.asin = String(asin == null ? "" : asin).trim();
+      if (physMeta) {
+        if (physMeta.lineKey) amazonMeta.lineKey = physMeta.lineKey;
+        if (physMeta.isGrocery) amazonMeta.grocery = true;
+        if (physMeta.site) amazonMeta.site = physMeta.site;
+      }
     }
     const metadataValue = amzImportMetadataJson_(amazonMeta, importTimestampStr);
 
@@ -2918,13 +3417,32 @@ function importAmazonRecent(csvText, months, options) {
     aggregatedOrderCount = orderIds.length;
     for (let g = 0; g < orderIds.length; g++) {
       const rows = groups[orderIds[g]];
+      if (orderStatusCol && col[orderStatusCol] !== undefined) {
+        let skipOrderPending = false;
+        for (let pj = 0; pj < rows.length; pj++) {
+          if (amzShouldSkipDigitalOrderStatus_(amzGetCsvOrderStatus_(rows[pj], col, orderStatusCol))) {
+            skipOrderPending = true;
+            break;
+          }
+        }
+        if (skipOrderPending) {
+          skippedDigitalPendingOrderCount += 1;
+          amzTrackSkippedOrderId_(skippedDigitalPendingOrderIds, orderIds[g]);
+          continue;
+        }
+      }
       const r = rows[0];
       let sumAmount = 0;
+      let hasAnyAmount = false;
       for (let j = 0; j < rows.length; j++) {
-        const v = parseFloat(rows[j][col[totalAmountCol]]);
-        if (!isNaN(v)) sumAmount += v;
+        const parsedAmt = amzParseCsvAmount_(rows[j][col[totalAmountCol]]);
+        if (!parsedAmt.isMissing) {
+          sumAmount += parsedAmt.value;
+          hasAnyAmount = true;
+        }
       }
-      const amount = sumAmount * -1;
+      const amount = hasAnyAmount ? sumAmount * -1 : "";
+      if (!hasAnyAmount) blankAmountRowCount += 1;
 
       const orderDateParsed = amzParseAmazonCsvDateLoose_(r[col[orderDateCol]]);
       if (!orderDateParsed) {
@@ -2961,7 +3479,7 @@ function importAmazonRecent(csvText, months, options) {
           lineItemCount: 0
         };
       }
-      perOrderOffset[oidKey].totalAmount += amount;
+      perOrderOffset[oidKey].totalAmount += hasAnyAmount ? amount : 0;
       perOrderOffset[oidKey].lineItemCount = rows.length;
 
       pushOneRow(r, rows, orderDate, orderID, productName, asin, amount, accountRow, payKey);
@@ -2985,26 +3503,60 @@ function importAmazonRecent(csvText, months, options) {
       const orderDate = orderDateParsed;
       if (cutoffStart && orderDate < cutoffStart) continue;
 
-      if (websiteColName && col[websiteColName] !== undefined) {
-        const wf = String(r[col[websiteColName]] || "").trim().toLowerCase();
-        const isWf = wf === AMZ_WHOLE_FOODS_WEBSITE;
-        if (skipPanda01 && isWf) continue;
-        if (skipNonPanda01 && !isWf) continue;
+      const orderIDEarly = r[col[orderIdCol]];
+      const oidEarly = String(orderIDEarly == null ? "" : orderIDEarly).trim();
+
+      let isGroceryRow = false;
+      if (amzCanClassifyGroceryOrderHistoryRows_(col, websiteColName)) {
+        isGroceryRow = amzIsGroceryOrderHistoryRow_(r, col, websiteColName);
+        if (skipPanda01 && isGroceryRow) {
+          skippedGroceryLineCount += 1;
+          amzTrackSkippedOrderId_(skippedGroceryOrderIds, oidEarly);
+          continue;
+        }
+        if (skipNonPanda01 && !isGroceryRow) continue;
       }
 
-      const orderID = r[col[orderIdCol]];
+      const orderID = orderIDEarly;
       const productName = r[col[productNameCol]];
       const asin = r[col[asinCol]];
-      const oidTrim = String(orderID == null ? "" : orderID).trim();
+      const oidTrim = oidEarly;
       if (!oidTrim) {
         amzLogSkippedCsvDataIfUnderCap_(timing, skippedRowDump, "Orders", "missing Order ID", r);
         continue;
       }
 
-      const tokenK = amzNormalizePurchaseDedupToken_(asin);
-      const dupKeyPurchase = "physical-purchase-line|" + oidTrim + "|" + tokenK;
+      if (orderStatusCol && col[orderStatusCol] !== undefined) {
+        const orderStatusVal = amzGetCsvOrderStatus_(r, col, orderStatusCol);
+        if (amzShouldSkipPhysicalOrderStatus_(orderStatusVal)) {
+          skippedPhysicalCancelCount += 1;
+          amzTrackSkippedOrderId_(skippedCancelOrderIds, oidTrim);
+          continue;
+        }
+      }
 
-      if (existingFullDescSet.has(dupKeyPurchase)) {
+      if (isGroceryRow && priorGroceryOrderIds.has(oidTrim)) {
+        duplicateCount += 1;
+        continue;
+      }
+
+      const qtyRaw = col["Original Quantity"] !== undefined ? r[col["Original Quantity"]] : "";
+      const unitPriceRaw = col["Unit Price"] !== undefined ? r[col["Unit Price"]] : "";
+      const lineTotalRaw = r[col[totalAmountCol]];
+      const shipDateRaw = col["Ship Date"] !== undefined ? r[col["Ship Date"]] : "";
+      const carrierRaw = amzGetCsvCarrierForDedup_(r, col);
+      const dupKeyPurchase = amzPhysicalPurchaseLineDedupKey_(
+        oidTrim,
+        asin,
+        productName,
+        qtyRaw,
+        unitPriceRaw,
+        lineTotalRaw,
+        shipDateRaw,
+        carrierRaw
+      );
+
+      if (amzIsDuplicatePhysicalPurchaseKey_(existingFullDescSet, dupKeyPurchase, oidTrim, asin)) {
         duplicateCount += 1;
         continue;
       }
@@ -3015,7 +3567,9 @@ function importAmazonRecent(csvText, months, options) {
         return "Payment type \"" + paymentMethodType + "\" not found. Import was stopped. Add new payment type to AMZ Import tab.";
       }
 
-      const amount = parseFloat(r[col[totalAmountCol]]) * -1;
+      const parsedAmt = amzParseCsvAmount_(r[col[totalAmountCol]]);
+      const amount = parsedAmt.isMissing ? "" : parsedAmt.value * -1;
+      if (parsedAmt.isMissing) blankAmountRowCount += 1;
       const payKey = paymentMethodType;
       const oidKey = oidTrim;
       if (!perOrderOffset[oidKey]) {
@@ -3028,10 +3582,27 @@ function importAmazonRecent(csvText, months, options) {
       } else if (perOrderOffset[oidKey].payKey !== paymentMethodType) {
         // Unusual: same Order ID, different payment strings — keep first row's payment for account routing
       }
-      perOrderOffset[oidKey].totalAmount += amount;
+      perOrderOffset[oidKey].totalAmount += parsedAmt.isMissing ? 0 : amount;
       perOrderOffset[oidKey].lineItemCount += 1;
 
-      pushOneRow(r, null, orderDate, orderID, productName, asin, amount, accountRow, payKey);
+      let siteVal = "";
+      if (isGroceryRow && websiteColName && col[websiteColName] !== undefined) {
+        siteVal = String(r[col[websiteColName]] || "").trim();
+      }
+      const lineKey = amzPhysicalPurchaseLineSuffix_(
+        asin,
+        productName,
+        qtyRaw,
+        unitPriceRaw,
+        lineTotalRaw,
+        shipDateRaw,
+        carrierRaw
+      );
+      pushOneRow(r, null, orderDate, orderID, productName, asin, amount, accountRow, payKey, {
+        lineKey: lineKey,
+        isGrocery: isGroceryRow,
+        site: siteVal
+      });
       existingFullDescSet.add(dupKeyPurchase);
     }
   }
@@ -3064,7 +3635,7 @@ function importAmazonRecent(csvText, months, options) {
     const oidKey = orderIdsForOffset[oi];
     const po = perOrderOffset[oidKey];
     const total = po.totalAmount;
-    if (total === 0) {
+    if (!isFinite(total) || total === 0) {
       offsetSkippedZeroNet += 1;
       continue;
     }
@@ -3178,6 +3749,50 @@ function importAmazonRecent(csvText, months, options) {
       offsetBlankAccountFields +
       " offset row(s) have blank Account fields — add the payment type on AMZ Import (or assign accounts manually on Transactions).";
   }
+  if (skippedDigitalPendingOrderCount > 0) {
+    summary +=
+      "\n" +
+      skippedDigitalPendingOrderCount +
+      " digital order(s) skipped — Order Status contains pending (not charged yet).";
+  }
+  if (skippedPhysicalCancelCount > 0) {
+    summary +=
+      "\n" +
+      skippedPhysicalCancelCount +
+      " physical line item(s) skipped — Order Status contains cancel.";
+  }
+  if (skippedGroceryLineCount > 0) {
+    summary +=
+      "\n" +
+      skippedGroceryLineCount +
+      " grocery line item(s) skipped — Whole Foods / Amazon Fresh filter.";
+  }
+  if (skippedPhysicalCancelCount > 0) {
+    amzAppendSkippedOrderIdsDebug_(
+      timing,
+      "Skipped physical cancel",
+      skippedPhysicalCancelCount,
+      skippedCancelOrderIds
+    );
+  }
+  if (skippedGroceryLineCount > 0) {
+    amzAppendSkippedOrderIdsDebug_(
+      timing,
+      "Skipped grocery (WF/Fresh filter)",
+      skippedGroceryLineCount,
+      skippedGroceryOrderIds
+    );
+  }
+  if (skippedDigitalPendingOrderCount > 0) {
+    amzAppendSkippedOrderIdsDebug_(
+      timing,
+      "Skipped digital pending",
+      skippedDigitalPendingOrderCount,
+      skippedDigitalPendingOrderIds,
+      "order(s)"
+    );
+  }
+  amzAppendBlankAmountImportNotice_(timing, blankAmountRowCount);
   amzPushSkippedCsvDumpCapNoticeIfNeeded_(timing, skippedRowDump);
   timing.unshift(summary);
   timing.unshift(detectedLabel);
@@ -3314,8 +3929,8 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
     const r = rows[0];
     let sumAmount = 0;
     for (let j = 0; j < rows.length; j++) {
-      const v = parseFloat(rows[j][col[totalAmountCol]]);
-      if (!isNaN(v)) sumAmount += v;
+      const parsedAmt = amzParseCsvAmount_(rows[j][col[totalAmountCol]]);
+      if (!parsedAmt.isMissing) sumAmount += parsedAmt.value;
     }
     const amount = sumAmount * -1;
 
@@ -3405,7 +4020,7 @@ function importDigitalReturnsCsv(csvText, options, digitalOrdersCsv) {
     const oidKey = orderIdsForOffset[oi];
     const po = perOrderOffset[oidKey];
     const total = po.totalAmount;
-    if (total === 0) continue;
+    if (!isFinite(total) || total === 0) continue;
     const orderDateForOffset = new Date(po.orderDate.getTime());
     orderDateForOffset.setHours(0, 0, 0, 0);
     const offMonth = Utilities.formatDate(orderDateForOffset, amzActiveSpreadsheetTimeZoneOrDefault_(), "yyyy-MM");
@@ -3760,7 +4375,7 @@ function importRefundDetailsCsv(csvText, options, orderHistoryCsv) {
     const oidKey = orderIdsForOffset[oi];
     const po = perOrderOffset[oidKey];
     const total = po.totalAmount;
-    if (total === 0) continue;
+    if (!isFinite(total) || total === 0) continue;
     const orderDateForOffset = new Date(po.orderDate.getTime());
     orderDateForOffset.setHours(0, 0, 0, 0);
     const offMonth = Utilities.formatDate(orderDateForOffset, amzActiveSpreadsheetTimeZoneOrDefault_(), "yyyy-MM");

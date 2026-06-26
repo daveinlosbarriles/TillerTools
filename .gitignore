@@ -1,1 +1,15 @@
 .DS_Store
+
+# Local Amazon export fixtures (PII — do not commit)
+docs/Amazon Test Orders.zip
+docs/Your Orders (11).zip
+docs/_tmp*/
+docs/_analyze_*.js
+docs/_simulate_*.js
+
+# Local sheet analysis scripts (MCP debugging — not part of add-on)
+docs/_*.py
+docs/__pycache__/
+
+# Cursor MCP (local credentials / machine-specific)
+.cursor/
